@@ -12,6 +12,8 @@ from rich.table import Table
 
 from axis import __version__
 from axis.config import settings
+from axis.tools.docker import DockerTool, DockerToolError
+from axis.tools.kubernetes import KubernetesTool, KubernetesToolError
 
 console = Console()
 
@@ -48,13 +50,28 @@ def status(namespace: Optional[str], context: Optional[str]) -> None:
     table.add_column("Status")
     table.add_column("Details")
 
-    # Placeholders – real checks will be added when tools are implemented
-    table.add_row("Kubernetes", "[yellow]pending[/yellow]", f"namespace={ns}")
-    table.add_row("Docker", "[yellow]pending[/yellow]", "local engine")
-    table.add_row("Cloud CLIs", "[yellow]pending[/yellow]", "aws / gcloud / az")
+    kubernetes = KubernetesTool(namespace=ns, context=context)
+    try:
+        pods = kubernetes.get_pods()
+        deployments = kubernetes.get_deployments()
+        nodes = kubernetes.get_nodes()
+        table.add_row(
+            "Kubernetes",
+            "[green]available[/green]",
+            f"namespace={ns}; {len(pods)} pods, {len(deployments)} deployments, {len(nodes)} nodes",
+        )
+    except KubernetesToolError as error:
+        table.add_row("Kubernetes", "[yellow]unavailable[/yellow]", str(error))
+
+    docker = DockerTool()
+    try:
+        containers = docker.list_containers(all=True)
+        running = sum(container.get("State") == "running" for container in containers)
+        table.add_row("Docker", "[green]available[/green]", f"{running} running, {len(containers)} total containers")
+    except DockerToolError as error:
+        table.add_row("Docker", "[yellow]unavailable[/yellow]", str(error))
 
     console.print(table)
-    console.print("\n[dim]Real status collection will be implemented next.[/dim]")
 
 
 @main.command()
@@ -64,8 +81,27 @@ def diagnose(target: str, namespace: Optional[str]) -> None:
     """Diagnose a service, deployment, pod or container."""
     ns = namespace or settings.default_namespace
     console.print(Panel.fit(f"[bold]Diagnosing:[/bold] {target}", border_style="blue"))
-    console.print(f"Namespace: [cyan]{ns}[/cyan]")
-    console.print("\n[yellow]Diagnosis engine is under construction.[/yellow]")
+
+    results = Table(show_header=True, header_style="bold magenta")
+    results.add_column("Source")
+    results.add_column("Result")
+    kubernetes = KubernetesTool(namespace=ns)
+    try:
+        description = kubernetes.describe("pod", target)
+        results.add_row("Kubernetes pod", description.strip() or "No description returned")
+    except KubernetesToolError as error:
+        results.add_row("Kubernetes pod", f"[yellow]{error}[/yellow]")
+
+    docker = DockerTool()
+    try:
+        inspection = docker.inspect(target)
+        state = inspection.get("State", {})
+        status = state.get("Status", "unknown") if isinstance(state, dict) else "unknown"
+        name = str(inspection.get("Name", target)).lstrip("/")
+        results.add_row("Docker container", f"name={name}; status={status}")
+    except DockerToolError as error:
+        results.add_row("Docker container", f"[yellow]{error}[/yellow]")
+    console.print(results)
 
 
 @main.command()
@@ -75,9 +111,25 @@ def diagnose(target: str, namespace: Optional[str]) -> None:
 def logs(target: str, namespace: Optional[str], tail: int) -> None:
     """Collect and summarize logs for a target."""
     ns = namespace or settings.default_namespace
+    if tail < 0:
+        raise click.BadParameter("must be zero or greater", param_hint="--tail")
     console.print(Panel.fit(f"[bold]Logs:[/bold] {target}", border_style="blue"))
-    console.print(f"Namespace: {ns} | Tail: {tail}")
-    console.print("\n[yellow]Log collection & summarization coming soon.[/yellow]")
+
+    kubernetes = KubernetesTool(namespace=ns)
+    try:
+        output = kubernetes.logs(target, tail=tail)
+        console.print(Panel(output.rstrip() or "No Kubernetes log lines returned.", title=f"Kubernetes pod ({ns})"))
+        return
+    except KubernetesToolError as kubernetes_error:
+        docker = DockerTool()
+        try:
+            output = docker.logs(target, tail=tail)
+            console.print(Panel(output.rstrip() or "No Docker log lines returned.", title="Docker container"))
+            return
+        except DockerToolError as docker_error:
+            console.print(f"[yellow]Unable to collect logs for {target}.[/yellow]")
+            console.print(f"Kubernetes: {kubernetes_error}")
+            console.print(f"Docker: {docker_error}")
 
 
 @main.command()
@@ -106,9 +158,8 @@ def doctor() -> None:
     checks = [
         ("Python", sys.version.split()[0]),
         ("Config dir", str(settings.config_dir)),
-        ("kubectl", "not checked yet"),
-        ("docker", "not checked yet"),
-        ("cloud CLIs", "not checked yet"),
+        ("kubectl", "available" if KubernetesTool.is_available() else "not found on PATH"),
+        ("docker", "available" if DockerTool.is_available() else "not found on PATH"),
     ]
 
     table = Table(show_header=True, header_style="bold")
