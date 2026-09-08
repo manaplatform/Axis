@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 from typing import Optional
 
 import click
-import yaml
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -15,6 +13,7 @@ from rich.table import Table
 from axis import __version__
 from axis.agents.planner import PlannerAgent
 from axis.config import Settings, settings
+from axis.core.llm import LLMClient
 from axis.diagnosis import DiagnosisReport, TargetType, diagnose as collect_diagnosis, resolve_target
 from axis.tools.docker import DockerTool, DockerToolError
 from axis.tools.kubernetes import KubernetesTool, KubernetesToolError
@@ -45,6 +44,9 @@ def configure() -> None:
     ).lower()
     model = click.prompt("Default Model", default=wizard_settings.default_model, show_default=True)
     api_key = _prompt_api_key(provider, _provider_key(wizard_settings, provider))
+    base_url = wizard_settings.llm_base_url
+    if provider == "custom":
+        base_url = click.prompt("Custom LLM base URL", default=base_url or "", show_default=bool(base_url))
     namespace = click.prompt("Default Namespace", default=wizard_settings.default_namespace, show_default=True)
     kubeconfig = click.prompt(
         "Preferred kubeconfig path (optional)", default=wizard_settings.kubeconfig or "", show_default=bool(wizard_settings.kubeconfig)
@@ -61,17 +63,17 @@ def configure() -> None:
     config = {
         "llm_provider": provider,
         "default_model": model,
+        "llm_base_url": base_url or None,
         "default_namespace": namespace,
         "kubeconfig": kubeconfig or None,
         "require_approval_for_mutations": require_approval,
         "prefer_gitops": prefer_gitops,
         "log_level": log_level,
     }
-    secrets = wizard_settings._load_yaml(wizard_settings.secrets_path)
+    values = config
     if api_key:
-        secrets[f"{provider}_api_key"] = api_key
-    _write_yaml(wizard_settings.config_path, config, secret=False)
-    _write_yaml(wizard_settings.secrets_path, secrets, secret=True)
+        values[f"{provider}_api_key"] = api_key
+    wizard_settings.set_many(values)
 
     console.print("\n[green]Configuration saved successfully.[/green]")
     console.print(f"Settings: [cyan]{wizard_settings.config_path}[/cyan]")
@@ -99,16 +101,6 @@ def _prompt_api_key(provider: str, current_key: Optional[str]) -> str:
 
 def _mask_secret(value: str) -> str:
     return "*" * 6 + value[-4:] if len(value) > 4 else "*" * 6
-
-
-def _write_yaml(path: Path, values: dict, *, secret: bool) -> None:
-    """Write configuration atomically and make the secrets file owner-readable only."""
-    temporary_path = path.with_suffix(path.suffix + ".tmp")
-    with temporary_path.open("w", encoding="utf-8") as config_file:
-        yaml.safe_dump(values, config_file, default_flow_style=False, sort_keys=True)
-    temporary_path.replace(path)
-    if secret:
-        path.chmod(0o600)
 
 
 @main.command()
@@ -285,7 +277,7 @@ def plan(goal: str, namespace: Optional[str], kube_context: Optional[str]) -> No
     """Create an execution plan for a goal."""
     ns = PlannerAgent.namespace_from_goal(goal) or namespace or settings.default_namespace
     console.print(Panel.fit(f"[bold]Plan for:[/bold] {goal}", border_style="cyan"))
-    plan_result = PlannerAgent().create_plan(
+    plan_result = PlannerAgent(llm_client=LLMClient.from_settings(settings)).create_plan(
         goal,
         docker=DockerTool(),
         kubernetes=KubernetesTool(namespace=ns, context=kube_context),
@@ -301,6 +293,7 @@ def _print_plan(plan_result: dict) -> None:
     table.add_column()
     table.add_row("Goal", plan_result["goal"])
     table.add_row("Domain", plan_result["domain"].title())
+    table.add_row("Engine", plan_result.get("engine", "local").upper())
     table.add_row("Interpretation", plan_result["interpretation"])
     table.add_row("Assumptions", "\n".join(f"• {item}" for item in plan_result["assumptions"]))
     table.add_row("Steps", "\n".join(f"{index}. {item}" for index, item in enumerate(plan_result["steps"], start=1)))

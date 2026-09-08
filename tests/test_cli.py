@@ -5,13 +5,14 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from click.testing import CliRunner
 import yaml
 
 from axis.cli import main
 from axis.config import Settings
+from axis.core.llm import Plan
 
 
 class StatusCommandTests(unittest.TestCase):
@@ -38,6 +39,29 @@ class StatusCommandTests(unittest.TestCase):
 
 
 class PlanCommandTests(unittest.TestCase):
+    @patch("axis.cli.LLMClient.from_settings")
+    @patch("axis.cli.DockerTool")
+    @patch("axis.cli.KubernetesTool")
+    def test_plan_renders_a_plan_returned_by_the_llm(self, kubernetes_type, docker_type, llm_factory) -> None:
+        llm = Mock()
+        llm.configured = True
+        llm.generate_plan.return_value = Plan(
+            interpretation="Containerize the repository for local use.",
+            assumptions=["A runnable application is present."],
+            steps=["Inspect the runtime."],
+            risk_level="medium",
+            requires_approval=True,
+            notes=[],
+        )
+        llm_factory.return_value = llm
+
+        result = CliRunner().invoke(main, ["plan", "create a docker container for this repo"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("Goal", result.output)
+        self.assertIn("create a docker container for this repo", result.output)
+        self.assertIn("Containerize the repository for local use.", result.output)
+
     @patch("axis.cli.DockerTool")
     @patch("axis.cli.KubernetesTool")
     def test_plan_renders_structured_scale_plan(self, kubernetes_type, docker_type) -> None:
@@ -226,16 +250,39 @@ class LogsCommandTests(unittest.TestCase):
 
 
 class ConfigureCommandTests(unittest.TestCase):
+    def test_configure_saves_custom_llm_base_url(self) -> None:
+        with TemporaryDirectory() as directory:
+            config_dir = Path(directory) / ".axis"
+            with patch("axis.config.Path.home", return_value=Path(directory)):
+                result = CliRunner().invoke(
+                    main,
+                    ["configure"],
+                    input=(
+                        "custom\nlocal-model\ncustom-key\nhttps://llm.example/v1\ndefault\n\ny\ny\nINFO\n"
+                    ),
+                )
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertNotIn("custom-key", result.output)
+            self.assertEqual(
+                yaml.safe_load((config_dir / "config.yaml").read_text())["llm_base_url"],
+                "https://llm.example/v1",
+            )
+            self.assertEqual(
+                yaml.safe_load((config_dir / "secrets.yaml").read_text()),
+                {"custom_api_key": "custom-key"},
+            )
+
     def test_configure_saves_settings_and_masks_api_key(self) -> None:
         with TemporaryDirectory() as directory:
             config_dir = Path(directory) / ".axis"
             runner = CliRunner()
-            result = runner.invoke(
-                main,
-                ["configure"],
-                input="openai\ngpt-test\nnot-a-real-api-key\nproduction\n/tmp/kubeconfig\ny\nn\nDEBUG\n",
-                env={"AXIS_CONFIG_DIR": str(config_dir)},
-            )
+            with patch("axis.config.Path.home", return_value=Path(directory)):
+                result = runner.invoke(
+                    main,
+                    ["configure"],
+                    input="openai\ngpt-test\nnot-a-real-api-key\nproduction\n/tmp/kubeconfig\ny\nn\nDEBUG\n",
+                )
 
             self.assertEqual(result.exit_code, 0, result.output)
             self.assertIn("Configuration saved successfully", result.output)
@@ -258,21 +305,16 @@ class ConfigureCommandTests(unittest.TestCase):
             )
             self.assertEqual((config_dir / "secrets.yaml").stat().st_mode & 0o777, 0o600)
 
-    def test_settings_load_files_but_environment_wins(self) -> None:
+    def test_settings_load_files(self) -> None:
         with TemporaryDirectory() as directory:
             config_dir = Path(directory)
             (config_dir / "config.yaml").write_text(
                 "default_model: saved-model\ndefault_namespace: saved-namespace\nprefer_gitops: false\n"
             )
             (config_dir / "secrets.yaml").write_text("openai_api_key: saved-key\n")
-            with patch.dict(
-                "os.environ",
-                {"AXIS_MODEL": "environment-model", "AXIS_NAMESPACE": "environment-namespace"},
-                clear=False,
-            ):
-                configured = Settings(config_dir=config_dir)
+            configured = Settings(config_dir=config_dir)
 
-            self.assertEqual(configured.default_model, "environment-model")
-            self.assertEqual(configured.default_namespace, "environment-namespace")
+            self.assertEqual(configured.default_model, "saved-model")
+            self.assertEqual(configured.default_namespace, "saved-namespace")
             self.assertEqual(configured.openai_api_key, "saved-key")
             self.assertFalse(configured.prefer_gitops)

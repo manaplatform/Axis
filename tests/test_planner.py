@@ -6,11 +6,44 @@ import unittest
 from unittest.mock import Mock
 
 from axis.agents.planner import PlannerAgent
+from axis.core.llm import LLMError, Plan
 from axis.tools.docker import DockerUnavailableError
 from axis.tools.kubernetes import KubernetesUnavailableError
 
 
 class PlannerAgentTests(unittest.TestCase):
+    def test_uses_validated_llm_plan_when_a_provider_is_configured(self) -> None:
+        llm = Mock()
+        llm.configured = True
+        llm.generate_plan.return_value = Plan(
+            interpretation="Containerize the application for local testing.",
+            assumptions=["A documented start command exists."],
+            steps=["Inspect the runtime.", "Request approval before building or running a container."],
+            risk_level="medium",
+            requires_approval=True,
+            notes=["No commands have been run."],
+        )
+
+        plan = PlannerAgent(llm_client=llm).create_plan("create a docker container for this repo")
+
+        self.assertEqual(plan["engine"], "llm")
+        self.assertEqual(plan["goal"], "create a docker container for this repo")
+        self.assertEqual(plan["interpretation"], "Containerize the application for local testing.")
+        self.assertEqual(plan["domain"], "docker")
+        llm.generate_plan.assert_called_once()
+
+    def test_llm_failure_falls_back_to_local_plan_with_a_clear_note(self) -> None:
+        llm = Mock()
+        llm.configured = True
+        llm.generate_plan.side_effect = LLMError("LLM request timed out")
+
+        plan = PlannerAgent(llm_client=llm).create_plan("create a docker container for this repo")
+
+        self.assertEqual(plan["engine"], "local")
+        self.assertIn("Package this repository", plan["interpretation"])
+        self.assertTrue(any("LLM unavailable" in note for note in plan["notes"]))
+        self.assertEqual(plan["error"], "LLM request timed out")
+
     def test_scale_plan_uses_light_kubernetes_context_and_requires_approval(self) -> None:
         kubernetes = Mock()
         kubernetes.current_context.return_value = "production-cluster"

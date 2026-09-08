@@ -7,10 +7,14 @@ from typing import Any, Dict, Optional
 
 from axis.tools.docker import DockerTool, DockerToolError
 from axis.tools.kubernetes import KubernetesTool, KubernetesToolError
+from axis.core.llm import LLMClient, LLMError
 
 
 class PlannerAgent:
     """Turn a natural-language goal into a safe, executable plan."""
+
+    def __init__(self, llm_client: Optional[LLMClient] = None) -> None:
+        self.llm_client = llm_client
 
     def create_plan(
         self,
@@ -41,6 +45,21 @@ class PlannerAgent:
         else:
             plan = self._general_plan(normalized_goal, domain, collected)
 
+        # A failed or absent model must never prevent local planning.  The local
+        # result remains the safe fallback and also supplies domain metadata.
+        if self.llm_client is not None and self.llm_client.configured:
+            try:
+                plan = {
+                    "goal": normalized_goal,
+                    **self.llm_client.generate_plan(normalized_goal, collected).model_dump(),
+                }
+                plan["engine"] = "llm"
+            except LLMError as error:
+                plan.setdefault("notes", []).append(f"LLM unavailable ({error}); using the local planner.")
+                plan["engine"] = "local"
+                plan["error"] = str(error)
+        else:
+            plan["engine"] = "local"
         plan["domain"] = domain
         plan["context"] = collected
         return plan
@@ -97,7 +116,7 @@ class PlannerAgent:
 
     @staticmethod
     def _containerize_plan(goal: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        return {"goal": goal, "interpretation": "Package this repository as a Docker image and run it safely for local verification.", "assumptions": ["The repository contains an application with a documented start command.", "No production deployment is intended by this request."], "steps": ["Inspect the repository's runtime, start command, exposed port, and required environment variables.", "Add a minimal Dockerfile and .dockerignore using a supported base image and a non-root runtime user where practical.", "Build a locally tagged image, for example `docker build -t axis-app:local .`.", "Run the image with explicit port and environment-variable mappings; do not publish it or replace an existing container.", "Verify startup with `docker ps`, application health checks, and container logs."], "risk_level": "medium", "requires_approval": True, "notes": ["Building and running containers changes the local Docker state and requires approval.", context.get("docker", "Docker availability was not checked.")]}
+        return {"goal": goal, "interpretation": "Package this repository as a Docker image and run it safely for local verification.", "assumptions": ["The repository contains an application with a documented start command.", "No production deployment is intended by this request."], "steps": ["Inspect the repository's runtime, start command, exposed port, and required configuration values.", "Add a minimal Dockerfile and .dockerignore using a supported base image and a non-root runtime user where practical.", "Build a locally tagged image, for example `docker build -t axis-app:local .`.", "Run the image with explicit port and configuration mappings; do not publish it or replace an existing container.", "Verify startup with `docker ps`, application health checks, and container logs."], "risk_level": "medium", "requires_approval": True, "notes": ["Building and running containers changes the local Docker state and requires approval.", context.get("docker", "Docker availability was not checked.")]}
 
     @staticmethod
     def _scale_plan(goal: str, namespace: str, context: Dict[str, Any]) -> Dict[str, Any]:
@@ -112,7 +131,7 @@ class PlannerAgent:
 
     @staticmethod
     def _docker_health_plan(goal: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        return {"goal": goal, "interpretation": "Diagnose Docker daemon or container health without changing Docker state.", "assumptions": ["The reported problem is local to the Docker CLI, daemon, or one of its containers."], "steps": ["Check Docker daemon connectivity and list running and stopped containers.", "Identify unhealthy, restarting, or exited containers and inspect their health status, exit code, and restart count.", "Review bounded recent logs and configuration for the affected container.", "Correlate findings with image availability, mounts, ports, environment variables, and host resource pressure.", "Propose a targeted remediation; obtain approval before restarting, recreating, or removing any container."], "risk_level": "low", "requires_approval": False, "notes": [context.get("docker", "Docker availability was not checked."), "Any remediation that changes containers requires separate approval."]}
+        return {"goal": goal, "interpretation": "Diagnose Docker daemon or container health without changing Docker state.", "assumptions": ["The reported problem is local to the Docker CLI, daemon, or one of its containers."], "steps": ["Check Docker daemon connectivity and list running and stopped containers.", "Identify unhealthy, restarting, or exited containers and inspect their health status, exit code, and restart count.", "Review bounded recent logs and configuration for the affected container.", "Correlate findings with image availability, mounts, ports, configured values, and host resource pressure.", "Propose a targeted remediation; obtain approval before restarting, recreating, or removing any container."], "risk_level": "low", "requires_approval": False, "notes": [context.get("docker", "Docker availability was not checked."), "Any remediation that changes containers requires separate approval."]}
 
     @staticmethod
     def _general_plan(goal: str, domain: str, context: Dict[str, Any]) -> Dict[str, Any]:
