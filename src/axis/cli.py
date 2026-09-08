@@ -13,6 +13,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from axis import __version__
+from axis.agents.planner import PlannerAgent
 from axis.config import Settings, settings
 from axis.diagnosis import DiagnosisReport, TargetType, diagnose as collect_diagnosis, resolve_target
 from axis.tools.docker import DockerTool, DockerToolError
@@ -278,10 +279,35 @@ def suggest(goal: Optional[str]) -> None:
 
 @main.command()
 @click.argument("goal")
-def plan(goal: str) -> None:
+@click.option("--namespace", "namespace", "-n", default=None, help="Kubernetes namespace for plan context")
+@click.option("--context", "kube_context", default=None, help="Kubernetes context for plan context")
+def plan(goal: str, namespace: Optional[str], kube_context: Optional[str]) -> None:
     """Create an execution plan for a goal."""
+    ns = PlannerAgent.namespace_from_goal(goal) or namespace or settings.default_namespace
     console.print(Panel.fit(f"[bold]Plan for:[/bold] {goal}", border_style="cyan"))
-    console.print("\n[yellow]Planner agent will generate a structured plan here.[/yellow]")
+    plan_result = PlannerAgent().create_plan(
+        goal,
+        docker=DockerTool(),
+        kubernetes=KubernetesTool(namespace=ns, context=kube_context),
+        namespace=ns,
+    )
+    _print_plan(plan_result)
+
+
+def _print_plan(plan_result: dict) -> None:
+    """Render a planner result as a human-executable checklist."""
+    table = Table.grid(padding=(0, 1))
+    table.add_column(style="bold cyan", no_wrap=True)
+    table.add_column()
+    table.add_row("Goal", plan_result["goal"])
+    table.add_row("Domain", plan_result["domain"].title())
+    table.add_row("Interpretation", plan_result["interpretation"])
+    table.add_row("Assumptions", "\n".join(f"• {item}" for item in plan_result["assumptions"]))
+    table.add_row("Steps", "\n".join(f"{index}. {item}" for index, item in enumerate(plan_result["steps"], start=1)))
+    table.add_row("Risk level", plan_result["risk_level"].title())
+    table.add_row("Requires approval", "Yes" if plan_result["requires_approval"] else "No")
+    table.add_row("Notes / warnings", "\n".join(f"• {item}" for item in plan_result["notes"]))
+    console.print(Panel(table, title="Execution plan", border_style="cyan"))
 
 
 @main.command()

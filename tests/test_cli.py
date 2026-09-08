@@ -37,6 +37,25 @@ class StatusCommandTests(unittest.TestCase):
         docker_type.return_value.list_containers.assert_called_once_with(all=True)
 
 
+class PlanCommandTests(unittest.TestCase):
+    @patch("axis.cli.DockerTool")
+    @patch("axis.cli.KubernetesTool")
+    def test_plan_renders_structured_scale_plan(self, kubernetes_type, docker_type) -> None:
+        kubernetes = kubernetes_type.return_value
+        kubernetes.current_context.return_value = "prod-cluster"
+        kubernetes.get_deployments.return_value = [{}]
+
+        result = CliRunner().invoke(main, ["plan", "scale the api deployment to 5 replicas", "-n", "production"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        for heading in ("Goal", "Interpretation", "Assumptions", "Steps", "Risk level", "Requires approval"):
+            self.assertIn(heading, result.output)
+        self.assertIn("Yes", result.output)
+        self.assertIn("context=prod-cluster", result.output)
+        kubernetes_type.assert_called_once_with(namespace="production", context=None)
+        docker_type.return_value.list_containers.assert_not_called()
+
+
 class DiagnoseCommandTests(unittest.TestCase):
     @patch("axis.cli.DockerTool")
     @patch("axis.cli.KubernetesTool")
