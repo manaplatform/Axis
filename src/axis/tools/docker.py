@@ -64,6 +64,23 @@ class DockerTool:
             raise DockerCommandError("docker returned an unexpected inspection document")
         return payload[0]
 
+    def version_info(self) -> dict[str, Any]:
+        """Return Docker client and server version details."""
+        return self._run_json(["version", "--format", "{{json .}}"])
+
+    def info(self) -> dict[str, Any]:
+        """Return a machine-readable Docker daemon summary."""
+        return self._run_json(["info", "--format", "{{json .}}"])
+
+    def _run_json(self, args: list[str]) -> dict[str, Any]:
+        output = self._run(args)
+        try:
+            payload = json.loads(output)
+        except json.JSONDecodeError as error:
+            raise DockerCommandError("docker returned invalid JSON") from error
+        if not isinstance(payload, dict):
+            raise DockerCommandError("docker returned an unexpected JSON document")
+        return payload
 
     def _run(self, args: list[str]) -> str:
         if not self.is_available():

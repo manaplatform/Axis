@@ -14,6 +14,7 @@ from rich.table import Table
 
 from axis import __version__
 from axis.config import Settings, settings
+from axis.diagnosis import DiagnosisReport, diagnose as collect_diagnosis, resolve_target
 from axis.tools.docker import DockerTool, DockerToolError
 from axis.tools.kubernetes import KubernetesTool, KubernetesToolError
 
@@ -155,26 +156,37 @@ def diagnose(target: str, namespace: Optional[str]) -> None:
     ns = namespace or settings.default_namespace
     console.print(Panel.fit(f"[bold]Diagnosing:[/bold] {target}", border_style="blue"))
 
-    results = Table(show_header=True, header_style="bold magenta")
-    results.add_column("Source")
-    results.add_column("Result")
     kubernetes = KubernetesTool(namespace=ns)
-    try:
-        description = kubernetes.describe("pod", target)
-        results.add_row("Kubernetes pod", description.strip() or "No description returned")
-    except KubernetesToolError as error:
-        results.add_row("Kubernetes pod", f"[yellow]{error}[/yellow]")
-
     docker = DockerTool()
-    try:
-        inspection = docker.inspect(target)
-        state = inspection.get("State", {})
-        status = state.get("Status", "unknown") if isinstance(state, dict) else "unknown"
-        name = str(inspection.get("Name", target)).lstrip("/")
-        results.add_row("Docker container", f"name={name}; status={status}")
-    except DockerToolError as error:
-        results.add_row("Docker container", f"[yellow]{error}[/yellow]")
-    console.print(results)
+    resolution = resolve_target(target, docker, kubernetes)
+    if not resolution.targets:
+        details = [f"[yellow]No Docker container or Kubernetes pod, deployment, or service named '{target}' was found.[/yellow]"]
+        if resolution.suggestions:
+            details.append("Similar targets: " + ", ".join(dict.fromkeys(resolution.suggestions)))
+        if resolution.docker_problem:
+            details.append(resolution.docker_problem)
+        if resolution.kubernetes_problem:
+            details.append(resolution.kubernetes_problem)
+        console.print(Panel("\n".join(details), title="Target not found", border_style="yellow"))
+        return
+    for resolved in resolution.targets:
+        _print_diagnosis(collect_diagnosis(resolved, docker, kubernetes))
+
+
+def _print_diagnosis(report: DiagnosisReport) -> None:
+    """Render a diagnosis without exposing command output or tracebacks."""
+    color = {"healthy": "green", "warning": "yellow", "unhealthy": "red", "unavailable": "yellow"}[report.status]
+    table = Table.grid(padding=(0, 1))
+    table.add_column(style="bold")
+    table.add_column()
+    table.add_row("Target", report.target.name)
+    table.add_row("Type", report.target.target_type.value)
+    table.add_row("Status", f"[{color}]{report.status}[/{color}]")
+    table.add_row("Findings", "\n".join(f"• {item}" for item in report.findings))
+    if report.events:
+        table.add_row("Recent events / logs", "\n".join(f"• {item}" for item in report.events))
+    table.add_row("Next actions", "\n".join(f"• {item}" for item in report.actions))
+    console.print(Panel(table, title="Diagnosis", border_style=color))
 
 
 @main.command()

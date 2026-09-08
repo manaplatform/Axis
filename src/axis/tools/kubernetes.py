@@ -43,9 +43,23 @@ class KubernetesTool:
         """Return deployments in the configured namespace as API objects."""
         return self._get_items(["get", "deployments", "-o", "json"])
 
+    def get_services(self) -> list[dict[str, Any]]:
+        """Return services in the configured namespace as API objects."""
+        return self._get_items(["get", "services", "-o", "json"])
+
     def get_nodes(self) -> list[dict[str, Any]]:
         """Return cluster nodes as Kubernetes API objects."""
         return self._get_items(["get", "nodes", "-o", "json"], namespaced=False)
+
+    def get_events(self, resource_name: str) -> list[dict[str, Any]]:
+        """Return events associated with a named resource in this namespace."""
+        return self._get_items(
+            ["get", "events", "-o", "json", "--field-selector", f"involvedObject.name={resource_name}"]
+        )
+
+    def current_context(self) -> str:
+        """Return the active kubectl context."""
+        return self._run(["config", "current-context"], namespaced=False).strip()
 
     def describe(self, kind: str, name: str) -> str:
         """Return the human-readable description for a resource."""
