@@ -64,16 +64,40 @@ class DockerTool:
             raise DockerCommandError("docker returned an unexpected inspection document")
         return payload[0]
 
+
     def _run(self, args: list[str]) -> str:
         if not self.is_available():
             raise DockerUnavailableError("docker is not installed or is not on PATH")
+
         try:
-            result = subprocess.run(["docker", *args], capture_output=True, text=True, check=False)
+            result = subprocess.run(
+                ["docker", *args],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
         except OSError as error:
             raise DockerUnavailableError(f"could not run docker: {error}") from error
+
         if result.returncode:
             detail = _last_error_line(result.stderr) or _last_error_line(result.stdout) or "unknown docker error"
+            lowered = detail.lower()
+
+            # Common daemon / socket problems
+            if any(x in lowered for x in [
+                "cannot connect to the docker daemon",
+                "is the docker daemon running",
+                "no such file or directory",
+                "permission denied",
+                "connect: no such file",
+            ]):
+                raise DockerUnavailableError(
+                    "Docker CLI is installed but cannot connect to the Docker daemon. "
+                    "Make sure Docker Desktop is running."
+                )
+
             raise DockerCommandError(detail)
+
         return result.stdout
 
 

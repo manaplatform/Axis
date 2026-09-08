@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from typing import Optional
 
 import click
+import yaml
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
 from axis import __version__
-from axis.config import settings
+from axis.config import Settings, settings
 from axis.tools.docker import DockerTool, DockerToolError
 from axis.tools.kubernetes import KubernetesTool, KubernetesToolError
 
@@ -28,12 +30,83 @@ def main() -> None:
 @main.command()
 def configure() -> None:
     """Interactive configuration wizard."""
-    console.print(Panel.fit("[bold]Axis Configuration[/bold]", border_style="cyan"))
-    settings.ensure_config_dir()
+    wizard_settings = Settings()
+    wizard_settings.ensure_config_dir()
+    console.print(Panel.fit("[bold]Axis Configuration Wizard[/bold]", border_style="cyan"))
+    console.print(f"Config directory: [cyan]{wizard_settings.config_dir}[/cyan]\n")
 
-    console.print(f"Config directory: [cyan]{settings.config_dir}[/cyan]")
-    console.print("\n[yellow]Configuration wizard will be expanded in the next iteration.[/yellow]")
-    console.print("For now you can set environment variables or edit ~/.axis/config.toml later.")
+    provider = click.prompt(
+        "LLM Provider",
+        type=click.Choice(["openai", "anthropic", "custom"], case_sensitive=False),
+        default=wizard_settings.llm_provider,
+        show_default=True,
+    ).lower()
+    model = click.prompt("Default Model", default=wizard_settings.default_model, show_default=True)
+    api_key = _prompt_api_key(provider, _provider_key(wizard_settings, provider))
+    namespace = click.prompt("Default Namespace", default=wizard_settings.default_namespace, show_default=True)
+    kubeconfig = click.prompt(
+        "Preferred kubeconfig path (optional)", default=wizard_settings.kubeconfig or "", show_default=bool(wizard_settings.kubeconfig)
+    )
+    require_approval = click.confirm(
+        "Require approval for mutations", default=wizard_settings.require_approval_for_mutations
+    )
+    prefer_gitops = click.confirm("Prefer GitOps (create PRs)", default=wizard_settings.prefer_gitops)
+    log_level = click.prompt(
+        "Log level", type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"], case_sensitive=False),
+        default=wizard_settings.log_level.upper(), show_default=True,
+    ).upper()
+
+    config = {
+        "llm_provider": provider,
+        "default_model": model,
+        "default_namespace": namespace,
+        "kubeconfig": kubeconfig or None,
+        "require_approval_for_mutations": require_approval,
+        "prefer_gitops": prefer_gitops,
+        "log_level": log_level,
+    }
+    secrets = wizard_settings._load_yaml(wizard_settings.secrets_path)
+    if api_key:
+        secrets[f"{provider}_api_key"] = api_key
+    _write_yaml(wizard_settings.config_path, config, secret=False)
+    _write_yaml(wizard_settings.secrets_path, secrets, secret=True)
+
+    console.print("\n[green]Configuration saved successfully.[/green]")
+    console.print(f"Settings: [cyan]{wizard_settings.config_path}[/cyan]")
+    console.print(f"Secrets: [cyan]{wizard_settings.secrets_path}[/cyan] (API keys hidden)")
+    approval_summary = "required" if require_approval else "not required"
+    gitops_summary = "preferred" if prefer_gitops else "direct changes allowed"
+    console.print(
+        f"Provider: {provider}; model: {model}; namespace: {namespace}; "
+        f"approval: {approval_summary}; GitOps: {gitops_summary}"
+    )
+
+
+def _provider_key(current_settings: Settings, provider: str) -> Optional[str]:
+    return getattr(current_settings, f"{provider}_api_key")
+
+
+def _prompt_api_key(provider: str, current_key: Optional[str]) -> str:
+    """Prompt without displaying either an entered or an existing secret."""
+    hint = f" [{_mask_secret(current_key)}]" if current_key else " (optional)"
+    value = click.prompt(
+        f"{provider.title()} API Key{hint}", default="", show_default=False, hide_input=True
+    )
+    return value or current_key or ""
+
+
+def _mask_secret(value: str) -> str:
+    return "*" * 6 + value[-4:] if len(value) > 4 else "*" * 6
+
+
+def _write_yaml(path: Path, values: dict, *, secret: bool) -> None:
+    """Write configuration atomically and make the secrets file owner-readable only."""
+    temporary_path = path.with_suffix(path.suffix + ".tmp")
+    with temporary_path.open("w", encoding="utf-8") as config_file:
+        yaml.safe_dump(values, config_file, default_flow_style=False, sort_keys=True)
+    temporary_path.replace(path)
+    if secret:
+        path.chmod(0o600)
 
 
 @main.command()
