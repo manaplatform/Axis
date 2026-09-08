@@ -14,7 +14,7 @@ from rich.table import Table
 
 from axis import __version__
 from axis.config import Settings, settings
-from axis.diagnosis import DiagnosisReport, diagnose as collect_diagnosis, resolve_target
+from axis.diagnosis import DiagnosisReport, TargetType, diagnose as collect_diagnosis, resolve_target
 from axis.tools.docker import DockerTool, DockerToolError
 from axis.tools.kubernetes import KubernetesTool, KubernetesToolError
 
@@ -194,27 +194,76 @@ def _print_diagnosis(report: DiagnosisReport) -> None:
 @click.option("--namespace", "-n", default=None)
 @click.option("--tail", default=100, help="Number of log lines")
 def logs(target: str, namespace: Optional[str], tail: int) -> None:
-    """Collect and summarize logs for a target."""
+    """Collect logs for a resolved Docker container or Kubernetes resource."""
     ns = namespace or settings.default_namespace
     if tail < 0:
         raise click.BadParameter("must be zero or greater", param_hint="--tail")
     console.print(Panel.fit(f"[bold]Logs:[/bold] {target}", border_style="blue"))
 
     kubernetes = KubernetesTool(namespace=ns)
-    try:
-        output = kubernetes.logs(target, tail=tail)
-        console.print(Panel(output.rstrip() or "No Kubernetes log lines returned.", title=f"Kubernetes pod ({ns})"))
+    docker = DockerTool()
+    resolution = resolve_target(target, docker, kubernetes)
+
+    if not resolution.targets:
+        _print_log_target_not_found(target, resolution.suggestions, resolution.docker_problem, resolution.kubernetes_problem)
         return
-    except KubernetesToolError as kubernetes_error:
-        docker = DockerTool()
-        try:
-            output = docker.logs(target, tail=tail)
-            console.print(Panel(output.rstrip() or "No Docker log lines returned.", title="Docker container"))
-            return
-        except DockerToolError as docker_error:
-            console.print(f"[yellow]Unable to collect logs for {target}.[/yellow]")
-            console.print(f"Kubernetes: {kubernetes_error}")
-            console.print(f"Docker: {docker_error}")
+
+    for resolved in resolution.targets:
+        if resolved.target_type is TargetType.DOCKER_ENGINE:
+            console.print(
+                Panel(
+                    "The Docker engine does not have a single container log stream. "
+                    "Choose a running container with `docker ps`, then run `axis logs <container>`.",
+                    title="Docker engine logs",
+                    border_style="yellow",
+                )
+            )
+        elif resolved.target_type is TargetType.KUBERNETES_CLUSTER:
+            console.print(
+                Panel(
+                    "A Kubernetes cluster does not have a single log stream. "
+                    "Choose a pod or deployment, then run `axis logs <target> -n <namespace>`.",
+                    title="Kubernetes cluster logs",
+                    border_style="yellow",
+                )
+            )
+        elif resolved.target_type is TargetType.DOCKER_CONTAINER:
+            _print_docker_logs(resolved.name, docker, tail)
+        else:
+            _print_kubernetes_logs(resolved.name, kubernetes, ns, tail)
+
+
+def _print_docker_logs(container: str, docker: DockerTool, tail: int) -> None:
+    try:
+        output = docker.logs(container, tail=tail)
+    except DockerToolError as error:
+        console.print(Panel(str(error), title=f"Unable to collect Docker logs for {container}", border_style="yellow"))
+        return
+    console.print(Panel(output.rstrip() or "No Docker log lines returned.", title="Docker container"))
+
+
+def _print_kubernetes_logs(resource: str, kubernetes: KubernetesTool, namespace: str, tail: int) -> None:
+    try:
+        output = kubernetes.logs(resource, tail=tail)
+    except KubernetesToolError as error:
+        console.print(
+            Panel(str(error), title=f"Unable to collect Kubernetes logs for {resource}", border_style="yellow")
+        )
+        return
+    console.print(Panel(output.rstrip() or "No Kubernetes log lines returned.", title=f"Kubernetes resource ({namespace})"))
+
+
+def _print_log_target_not_found(
+    target: str, suggestions: list[str], docker_problem: Optional[str], kubernetes_problem: Optional[str]
+) -> None:
+    details = [f"[yellow]No Docker container or Kubernetes pod, deployment, or service named '{target}' was found.[/yellow]"]
+    if suggestions:
+        details.append("Similar targets: " + ", ".join(dict.fromkeys(suggestions)))
+    if docker_problem:
+        details.append(docker_problem)
+    if kubernetes_problem:
+        details.append(kubernetes_problem)
+    console.print(Panel("\n".join(details), title="Target not found", border_style="yellow"))
 
 
 @main.command()

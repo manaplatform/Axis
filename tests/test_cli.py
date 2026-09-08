@@ -126,6 +126,86 @@ class DiagnoseCommandTests(unittest.TestCase):
         self.assertNotIn("inspect", result.output)
 
 
+class LogsCommandTests(unittest.TestCase):
+    @patch("axis.cli.DockerTool")
+    @patch("axis.cli.KubernetesTool")
+    def test_docker_engine_explains_that_it_has_no_container_log_stream(self, kubernetes_type, docker_type) -> None:
+        result = CliRunner().invoke(main, ["logs", "docker"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("does not have a single container log stream", result.output)
+        self.assertIn("docker ps", result.output)
+        docker_type.return_value.logs.assert_not_called()
+        kubernetes_type.return_value.logs.assert_not_called()
+        docker_type.return_value.list_containers.assert_not_called()
+        kubernetes_type.return_value.get_pods.assert_not_called()
+
+    @patch("axis.cli.DockerTool")
+    @patch("axis.cli.KubernetesTool")
+    def test_kubernetes_cluster_explains_that_it_has_no_single_log_stream(self, kubernetes_type, docker_type) -> None:
+        result = CliRunner().invoke(main, ["logs", "k8s"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("does not have a single log stream", result.output)
+        self.assertIn("deployment", result.output)
+        docker_type.return_value.logs.assert_not_called()
+        kubernetes_type.return_value.logs.assert_not_called()
+        docker_type.return_value.list_containers.assert_not_called()
+        kubernetes_type.return_value.get_pods.assert_not_called()
+
+    @patch("axis.cli.DockerTool")
+    @patch("axis.cli.KubernetesTool")
+    def test_container_logs_do_not_try_kubernetes_logs(self, kubernetes_type, docker_type) -> None:
+        docker, kubernetes = docker_type.return_value, kubernetes_type.return_value
+        docker.list_containers.return_value = [{"ID": "abc123def456", "Name": "api", "State": "running"}]
+        docker.logs.return_value = "container ready\n"
+        kubernetes.get_pods.return_value = []
+        kubernetes.get_deployments.return_value = []
+        kubernetes.get_services.return_value = []
+
+        result = CliRunner().invoke(main, ["logs", "abc123def456789", "--tail", "25"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("container ready", result.output)
+        docker.logs.assert_called_once_with("api", tail=25)
+        kubernetes.logs.assert_not_called()
+
+    @patch("axis.cli.DockerTool")
+    @patch("axis.cli.KubernetesTool")
+    def test_kubernetes_resource_logs_do_not_try_docker_logs(self, kubernetes_type, docker_type) -> None:
+        docker, kubernetes = docker_type.return_value, kubernetes_type.return_value
+        docker.list_containers.return_value = []
+        kubernetes.get_pods.return_value = [{"kind": "Pod", "metadata": {"name": "api"}}]
+        kubernetes.get_deployments.return_value = []
+        kubernetes.get_services.return_value = []
+        kubernetes.logs.return_value = "pod ready\n"
+
+        result = CliRunner().invoke(main, ["logs", "api", "-n", "production"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("pod ready", result.output)
+        kubernetes_type.assert_called_once_with(namespace="production")
+        kubernetes.logs.assert_called_once_with("api", tail=100)
+        docker.logs.assert_not_called()
+
+    @patch("axis.cli.DockerTool")
+    @patch("axis.cli.KubernetesTool")
+    def test_unknown_target_has_suggestions_without_log_attempts(self, kubernetes_type, docker_type) -> None:
+        docker, kubernetes = docker_type.return_value, kubernetes_type.return_value
+        docker.list_containers.return_value = [{"Name": "api-worker"}]
+        kubernetes.get_pods.return_value = []
+        kubernetes.get_deployments.return_value = []
+        kubernetes.get_services.return_value = []
+
+        result = CliRunner().invoke(main, ["logs", "api"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("Target not found", result.output)
+        self.assertIn("container/api-worker", result.output)
+        docker.logs.assert_not_called()
+        kubernetes.logs.assert_not_called()
+
+
 class ConfigureCommandTests(unittest.TestCase):
     def test_configure_saves_settings_and_masks_api_key(self) -> None:
         with TemporaryDirectory() as directory:
