@@ -131,6 +131,43 @@ def test_run_passes_registry_schemas_as_tools() -> None:
     assert client.responses.requests[0]["model"] == "gpt-4o"
 
 
+def test_echoed_function_call_has_only_api_accepted_fields() -> None:
+    """Regression: SDK output items carry read-only fields (status, id, ...)
+    that the Responses API rejects with 400 if echoed back."""
+
+    class SdkLikeCall:
+        type = "function_call"
+
+        def __init__(self) -> None:
+            self.call_id = "call-1"
+            self.name = "search_directory"
+            self.arguments = "{}"
+
+        def model_dump(self, mode: str = "json") -> Dict[str, Any]:
+            return {
+                "type": "function_call",
+                "id": "fc_123",
+                "call_id": "call-1",
+                "name": "search_directory",
+                "arguments": "{}",
+                "status": "completed",
+            }
+
+    registry, _ = _stub_registry()
+    client = ScriptedClient(
+        [
+            FakeResponse([SdkLikeCall()]),
+            FakeResponse([], "ok"),
+        ]
+    )
+    _runner(registry, client, gate=FakeGate()).run("x")
+    echoed = [
+        i for i in client.responses.requests[1]["input"] if i.get("type") == "function_call"
+    ]
+    assert len(echoed) == 1
+    assert set(echoed[0].keys()) == {"type", "call_id", "name", "arguments"}
+
+
 def test_unknown_tool_is_reported_to_model() -> None:
     registry, seen = _stub_registry()
     client = ScriptedClient(

@@ -10,6 +10,10 @@
   the model. The loop ends at the final answer or `--max-steps`.
 - Added `axis.agents.registry` with a `ToolRegistry` and `default_registry()`
   (filesystem tools first; kubernetes/docker/shell plug in with one call).
+- Fixed the agent loop echoing full SDK output items back into the Responses
+  API input: read-only fields like `status` caused HTTP 400 "Unknown
+  parameter". Only `function_call` items are echoed now, whitelisted to the
+  fields the API accepts (`type`, `call_id`, `name`, `arguments`).
 
 - Preserved the requested goal in LLM-generated plans so the CLI can render them.
 - Switched the OpenAI provider to the official OpenAI Python client's Responses API.
