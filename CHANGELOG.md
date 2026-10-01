@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.0.2 — 2026-10-01
+
 - Added `axis run`: an LLM tool-calling agent loop over the OpenAI Responses
   API. The model picks tools from the new `axis.agents.registry`
   (name → local executor), the runner executes them locally with a live Rich
