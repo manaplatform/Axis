@@ -88,6 +88,7 @@ axis/
 - [ ] Docker tools
 - [ ] Cloud CLI integrations
 - [ ] Analyzer + Planner agents
+- [x] Agent runner (`axis run`) — LLM tool-calling loop with live display and approvals
 - [ ] Safety & permission system
 - [ ] GitOps PR generation
 - [ ] Dashboard (future)

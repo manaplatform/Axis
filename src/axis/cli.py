@@ -12,10 +12,14 @@ from rich.table import Table
 
 from axis import __version__
 from axis.agents.planner import PlannerAgent
+from axis.agents.registry import default_registry
+from axis.agents.runner import AgentRunner, RunnerError
 from axis.config import Settings, settings
 from axis.core.llm import LLMClient
 from axis.diagnosis import DiagnosisReport, TargetType, diagnose as collect_diagnosis, resolve_target
+from axis.safety.permissions import PermissionGate
 from axis.tools.docker import DockerTool, DockerToolError
+from axis.tools.filesystem import FilesystemError
 from axis.tools.kubernetes import KubernetesTool, KubernetesToolError
 
 console = Console()
@@ -301,6 +305,44 @@ def _print_plan(plan_result: dict) -> None:
     table.add_row("Requires approval", "Yes" if plan_result["requires_approval"] else "No")
     table.add_row("Notes / warnings", "\n".join(f"• {item}" for item in plan_result["notes"]))
     console.print(Panel(table, title="Execution plan", border_style="cyan"))
+
+
+@main.command()
+@click.argument("prompt")
+@click.option("--max-steps", "max_steps", default=10, show_default=True, help="Maximum tool-calling steps.")
+@click.option("--model", default=None, help="Override the configured model.")
+@click.option(
+    "--workspace", "-w", "workspace", default=".", show_default=True,
+    help="Workspace root for file tools.",
+)
+def run(prompt: str, max_steps: int, model: Optional[str], workspace: str) -> None:
+    """Run a prompt with the LLM agent loop (tools execute locally)."""
+    if max_steps < 1:
+        raise click.BadParameter("must be at least 1", param_hint="--max-steps")
+    llm_client = LLMClient.from_settings(settings)
+    if not llm_client.configured:
+        console.print(
+            Panel(
+                "No LLM API key is configured. Run [bold]axis configure[/bold] first.",
+                title="axis run",
+                border_style="yellow",
+            )
+        )
+        raise SystemExit(1)
+    gate = PermissionGate(require_approval=settings.require_approval_for_mutations)
+    try:
+        registry = default_registry(workspace_root=workspace, gate=gate)
+        runner = AgentRunner(
+            registry=registry,
+            llm=llm_client,
+            model=model,
+            max_steps=max_steps,
+            gate=gate,
+        )
+        runner.run(prompt)
+    except (RunnerError, FilesystemError) as error:
+        console.print(Panel(str(error), title="axis run failed", border_style="red"))
+        raise SystemExit(1)
 
 
 @main.command()
