@@ -9,6 +9,7 @@ Axis is an open-source AI agent designed to help you understand, diagnose, and s
 - **Status overview** of clusters, nodes, pods, and containers
 - **Intelligent diagnosis** of services and failures
 - **Log collection & summarization**
+- **Filesystem tools** — `search_directory` (glob + content grep, read-only) and `create_file` (approval-gated), confined to a workspace root; deployable as OpenAI function-calling tools via `axis.tools.filesystem.OPENAI_FUNCTION_SCHEMAS`
 - **Action suggestions** with clear reasoning
 - **Execution planning** with step-by-step plans
 - **Safety gates** — dangerous actions require explicit approval
@@ -81,6 +82,7 @@ axis/
 ## Roadmap
 
 - [x] Project scaffold
+- [x] Filesystem tools (directory search + file creation, OpenAI function schemas)
 - [ ] Core CLI & configuration
 - [ ] Kubernetes tools
 - [ ] Docker tools
