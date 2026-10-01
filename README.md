@@ -36,6 +36,15 @@ axis suggest
 axis plan "scale the api deployment to 5 replicas"
 ```
 
+## Configuration
+
+Run `axis configure` to select an LLM provider and model and to save its API
+key. Axis loads these values only from `~/.axis/config.yaml` and the private
+`~/.axis/secrets.yaml` (mode `0600`); it does not use environment variables.
+The `Settings` module also provides `get_configure(key)` and
+`set_configure(key, value)` for programmatic access. Custom LLM providers are
+configured with their base URL in the wizard.
+
 ## Supported Targets (MVP)
 
 | Layer       | Tools / Interfaces                  |
