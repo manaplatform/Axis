@@ -354,6 +354,22 @@ def test_docker_executor_binds_method_arguments(monkeypatch) -> None:
     assert result == [{"Names": "db"}]
 
 
+def test_default_registry_passes_namespace_and_context(monkeypatch) -> None:
+    from axis.agents import registry as registry_module
+
+    captured: dict = {}
+    real_init = registry_module.KubernetesTool.__init__
+
+    def fake_init(self, namespace="default", context=None):
+        captured["namespace"] = namespace
+        captured["context"] = context
+        real_init(self, namespace=namespace, context=context)
+
+    monkeypatch.setattr(registry_module.KubernetesTool, "__init__", fake_init)
+    default_registry(workspace_root=".", namespace="prod", kube_context="myctx")
+    assert captured == {"namespace": "prod", "context": "myctx"}
+
+
 def test_k8s_tool_result_flows_through_runner_loop(monkeypatch) -> None:
     from axis.agents import registry as registry_module
 
@@ -374,17 +390,78 @@ def test_k8s_tool_result_flows_through_runner_loop(monkeypatch) -> None:
     assert "web-0" in output
 
 
-def test_default_registry_passes_namespace_and_context(monkeypatch) -> None:
+# ----------------------------------------------------------------------
+# shell tool wiring
+# ----------------------------------------------------------------------
+def test_default_registry_registers_shell() -> None:
+    registry = default_registry(workspace_root=".")
+    tool = registry.get("shell")
+    assert not tool.mutating
+    assert tool.classify is not None
+    assert tool.classify({"command": "ls -la"}) is False
+    assert tool.classify({"command": "kubectl get pods"}) is False
+    assert tool.classify({"command": "echo hi > /tmp/x"}) is True
+    assert tool.classify({"command": ""}) is False
+
+
+def test_shell_read_only_command_skips_approval(monkeypatch) -> None:
     from axis.agents import registry as registry_module
 
-    captured: dict = {}
-    real_init = registry_module.KubernetesTool.__init__
+    calls: dict = {}
 
-    def fake_init(self, namespace="default", context=None):
-        captured["namespace"] = namespace
-        captured["context"] = context
-        real_init(self, namespace=namespace, context=context)
+    def fake_run(self, command, workdir=".", timeout_s=30, max_output_chars=4000):
+        calls["command"] = command
+        return {"stdout": "ok\n", "exit_code": 0}
 
-    monkeypatch.setattr(registry_module.KubernetesTool, "__init__", fake_init)
-    default_registry(workspace_root=".", namespace="prod", kube_context="myctx")
-    assert captured == {"namespace": "prod", "context": "myctx"}
+    monkeypatch.setattr(registry_module.ShellTool, "run", fake_run)
+    registry = default_registry(workspace_root=".")
+    gate = FakeGate(allow=True)
+    client = ScriptedClient(
+        [
+            FakeResponse([FakeCall("shell", '{"command": "ls -la"}', "c1")]),
+            FakeResponse([], "done"),
+        ]
+    )
+    assert _runner(registry, client, gate=gate).run("x") == "done"
+    assert calls == {"command": "ls -la"}
+    assert gate.checks == []
+
+
+def test_shell_mutating_command_requires_approval(monkeypatch) -> None:
+    from axis.agents import registry as registry_module
+
+    calls: dict = {}
+
+    def fake_run(self, command, workdir=".", timeout_s=30, max_output_chars=4000):
+        calls["command"] = command
+        return {"stdout": "", "exit_code": 0}
+
+    monkeypatch.setattr(registry_module.ShellTool, "run", fake_run)
+    registry = default_registry(workspace_root=".")
+    gate = FakeGate(allow=False)
+    client = ScriptedClient(
+        [
+            FakeResponse([FakeCall("shell", '{"command": "echo hi > /tmp/x"}', "c1")]),
+            FakeResponse([], "done"),
+        ]
+    )
+    assert _runner(registry, client, gate=gate).run("x") == "done"
+    assert calls == {}
+    assert len(gate.checks) == 1
+    output = client.responses.requests[1]["input"][-1]["output"]
+    assert json.loads(output)["denied"] is True
+
+
+def test_shell_denied_command_is_blocked_without_approval() -> None:
+    registry = default_registry(workspace_root=".")
+    gate = FakeGate(allow=True)
+    client = ScriptedClient(
+        [
+            FakeResponse([FakeCall("shell", '{"command": "rm -rf /"}', "c1")]),
+            FakeResponse([], "done"),
+        ]
+    )
+    assert _runner(registry, client, gate=gate).run("x") == "done"
+    assert gate.checks == []
+    output = client.responses.requests[1]["input"][-1]["output"]
+    assert "denied" in output.lower()

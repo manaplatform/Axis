@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Merged the shell tool branch into the agent work: `axis.tools.shell`
+  (`ShellTool.run`, `classify_command`) is now part of main-line history.
+  `axis.tools` now exposes per-family schemas (`OPENAI_FUNCTION_SCHEMAS`
+  stays filesystem-only for backwards compatibility; new
+  `SHELL_FUNCTION_SCHEMAS` plus an `ALL_FUNCTION_SCHEMAS` aggregate).
+- Wired the `shell` function into the agent runner registry: each command is
+  classified per call — read-only commands run free, mutating ones need
+  approval through the runner's gate, denied ones are blocked and reported
+  to the model as an error.
 - Wired the Kubernetes and Docker tools into the agent runner registry:
   `k8s_*` (get_pods, get_deployments, get_services, get_nodes, get_events,
   current_context, describe, logs) and `docker_*` (list_containers, logs,
