@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Wired the Kubernetes and Docker tools into the agent runner registry:
+  `k8s_*` (get_pods, get_deployments, get_services, get_nodes, get_events,
+  current_context, describe, logs) and `docker_*` (list_containers, logs,
+  inspect, version, info) are now callable by the model through `axis run`.
+  Both tool families are fully read-only, so they execute without approval;
+  `axis run` gained `--namespace`/`--context` for the k8s tools.
+
 ## 0.0.2 — 2026-10-01
 
 - Added `axis run`: an LLM tool-calling agent loop over the OpenAI Responses
