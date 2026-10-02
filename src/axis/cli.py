@@ -315,7 +315,16 @@ def _print_plan(plan_result: dict) -> None:
     "--workspace", "-w", "workspace", default=".", show_default=True,
     help="Workspace root for file tools.",
 )
-def run(prompt: str, max_steps: int, model: Optional[str], workspace: str) -> None:
+@click.option("--namespace", "-n", "namespace", default=None, help="Kubernetes namespace for k8s tools.")
+@click.option("--context", "kube_context", default=None, help="Kubernetes context for k8s tools.")
+def run(
+    prompt: str,
+    max_steps: int,
+    model: Optional[str],
+    workspace: str,
+    namespace: Optional[str],
+    kube_context: Optional[str],
+) -> None:
     """Run a prompt with the LLM agent loop (tools execute locally)."""
     if max_steps < 1:
         raise click.BadParameter("must be at least 1", param_hint="--max-steps")
@@ -331,7 +340,12 @@ def run(prompt: str, max_steps: int, model: Optional[str], workspace: str) -> No
         raise SystemExit(1)
     gate = PermissionGate(require_approval=settings.require_approval_for_mutations)
     try:
-        registry = default_registry(workspace_root=workspace, gate=gate)
+        registry = default_registry(
+            workspace_root=workspace,
+            gate=gate,
+            namespace=namespace or settings.default_namespace,
+            kube_context=kube_context,
+        )
         runner = AgentRunner(
             registry=registry,
             llm=llm_client,

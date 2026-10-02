@@ -2,19 +2,20 @@
 
 The agent runner asks the model which tool to call; this registry resolves the
 returned function name to the local code that executes it. New tool families
-(kubernetes, docker, shell, ...) plug in with a single ``register`` call —
-the runner loop itself never changes.
+plug in with a single ``register`` call — the runner loop itself never changes.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 from axis.safety.permissions import PermissionGate
 from axis.tools import OPENAI_FUNCTION_SCHEMAS as FILESYSTEM_SCHEMAS
+from axis.tools.docker import DOCKER_FUNCTION_SCHEMAS, DockerTool
 from axis.tools.filesystem import FilesystemTool
+from axis.tools.kubernetes import KUBERNETES_FUNCTION_SCHEMAS, KubernetesTool
 
 
 class UnknownToolError(KeyError):
@@ -57,42 +58,111 @@ class ToolRegistry:
         return [tool.schema for tool in self._tools.values()]
 
 
+def _executor(method: Callable[..., Any]) -> Callable[[Dict[str, Any]], Dict[str, Any]]:
+    """Adapt a tool method to the registry's ``args -> result`` shape."""
+
+    def execute(args: Dict[str, Any]) -> Dict[str, Any]:
+        return method(**args)
+
+    return execute
+
+
 def default_registry(
     workspace_root: Union[str, Path] = ".",
     *,
     gate: PermissionGate | None = None,
+    namespace: str = "default",
+    kube_context: Optional[str] = None,
 ) -> ToolRegistry:
-    """Registry with the filesystem tools.
+    """Registry with the filesystem, Kubernetes, and Docker tools.
 
     Approvals for mutating tools are performed centrally by the agent runner
     (see :mod:`axis.agents.runner`), so the filesystem tool is built with a
     non-interactive gate here — the runner's own gate is the single policy
     point. Using :class:`FilesystemTool` directly still goes through its own
     interactive gate.
+
+    The Kubernetes and Docker tools are fully read-only, so they all register
+    as non-mutating. ``namespace``/``kube_context`` configure the Kubernetes
+    tool; the Docker tool needs no configuration.
     """
     _ = gate  # reserved: future tool families may need their own gate wiring
     registry = ToolRegistry()
+    _register_filesystem(registry, workspace_root)
+    _register_kubernetes(registry, namespace=namespace, context=kube_context)
+    _register_docker(registry)
+    return registry
+
+
+def _register_filesystem(registry: ToolRegistry, workspace_root: Union[str, Path]) -> None:
     tool = FilesystemTool(
         workspace_root=workspace_root,
         gate=PermissionGate(require_approval=False),
     )
-    by_name = {schema["name"]: schema for schema in FILESYSTEM_SCHEMAS}
-    registry.register(
-        RegisteredTool(
-            name="search_directory",
-            schema=by_name["search_directory"],
-            execute=lambda args: tool.search_directory(**args),
-            mutating=False,
-            description="Read-only directory search (glob + content grep).",
+    methods = {
+        "search_directory": (tool.search_directory, False, "Read-only directory search (glob + content grep)."),
+        "create_file": (tool.create_file, True, "Create a file (requires approval)."),
+    }
+    for schema in FILESYSTEM_SCHEMAS:
+        name = schema["name"]
+        method, mutating, description = methods[name]
+        registry.register(
+            RegisteredTool(
+                name=name,
+                schema=schema,
+                execute=_executor(method),
+                mutating=mutating,
+                description=description,
+            )
         )
-    )
-    registry.register(
-        RegisteredTool(
-            name="create_file",
-            schema=by_name["create_file"],
-            execute=lambda args: tool.create_file(**args),
-            mutating=True,
-            description="Create a file (requires approval).",
+
+
+def _register_kubernetes(
+    registry: ToolRegistry, *, namespace: str, context: Optional[str]
+) -> None:
+    tool = KubernetesTool(namespace=namespace, context=context)
+    methods = {
+        "k8s_get_pods": (tool.get_pods, "List pods in the namespace."),
+        "k8s_get_deployments": (tool.get_deployments, "List deployments in the namespace."),
+        "k8s_get_services": (tool.get_services, "List services in the namespace."),
+        "k8s_get_nodes": (tool.get_nodes, "List cluster nodes."),
+        "k8s_get_events": (tool.get_events, "List events for a named resource."),
+        "k8s_current_context": (tool.current_context, "Show the active kubectl context."),
+        "k8s_describe": (tool.describe, "Describe a Kubernetes resource."),
+        "k8s_logs": (tool.logs, "Read recent pod log lines."),
+    }
+    for schema in KUBERNETES_FUNCTION_SCHEMAS:
+        name = schema["name"]
+        method, description = methods[name]
+        registry.register(
+            RegisteredTool(
+                name=name,
+                schema=schema,
+                execute=_executor(method),
+                mutating=False,
+                description=description,
+            )
         )
-    )
-    return registry
+
+
+def _register_docker(registry: ToolRegistry) -> None:
+    tool = DockerTool()
+    methods = {
+        "docker_list_containers": (tool.list_containers, "List Docker containers."),
+        "docker_logs": (tool.logs, "Read recent container log lines."),
+        "docker_inspect": (tool.inspect, "Inspect a container."),
+        "docker_version": (tool.version_info, "Show Docker client/server versions."),
+        "docker_info": (tool.info, "Show a Docker daemon summary."),
+    }
+    for schema in DOCKER_FUNCTION_SCHEMAS:
+        name = schema["name"]
+        method, description = methods[name]
+        registry.register(
+            RegisteredTool(
+                name=name,
+                schema=schema,
+                execute=_executor(method),
+                mutating=False,
+                description=description,
+            )
+        )
