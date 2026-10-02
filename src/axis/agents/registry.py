@@ -16,6 +16,8 @@ from axis.tools import OPENAI_FUNCTION_SCHEMAS as FILESYSTEM_SCHEMAS
 from axis.tools.docker import DOCKER_FUNCTION_SCHEMAS, DockerTool
 from axis.tools.filesystem import FilesystemTool
 from axis.tools.kubernetes import KUBERNETES_FUNCTION_SCHEMAS, KubernetesTool
+from axis.tools.shell import OPENAI_FUNCTION_SCHEMAS as SHELL_SCHEMAS
+from axis.tools.shell import ShellTool, classify_command
 
 
 class UnknownToolError(KeyError):
@@ -31,6 +33,10 @@ class RegisteredTool:
     execute: Callable[[Dict[str, Any]], Dict[str, Any]]
     mutating: bool = False
     description: str = ""
+    # Optional per-call mutation check, for tools whose risk depends on the
+    # arguments (e.g. the shell tool classifies each command). When present,
+    # the runner treats the call as mutating if either flag says so.
+    classify: Optional[Callable[[Dict[str, Any]], bool]] = None
 
 
 class ToolRegistry:
@@ -74,21 +80,24 @@ def default_registry(
     namespace: str = "default",
     kube_context: Optional[str] = None,
 ) -> ToolRegistry:
-    """Registry with the filesystem, Kubernetes, and Docker tools.
+    """Registry with the filesystem, shell, Kubernetes, and Docker tools.
 
     Approvals for mutating tools are performed centrally by the agent runner
-    (see :mod:`axis.agents.runner`), so the filesystem tool is built with a
-    non-interactive gate here — the runner's own gate is the single policy
-    point. Using :class:`FilesystemTool` directly still goes through its own
-    interactive gate.
+    (see :mod:`axis.agents.runner`), so the filesystem and shell tools are
+    built with non-interactive gates here — the runner's own gate is the
+    single policy point. Using those tools directly still goes through their
+    own interactive gates.
 
     The Kubernetes and Docker tools are fully read-only, so they all register
-    as non-mutating. ``namespace``/``kube_context`` configure the Kubernetes
-    tool; the Docker tool needs no configuration.
+    as non-mutating. The shell tool classifies each command: read-only
+    commands run free, mutating ones need approval, denied ones are blocked.
+    ``namespace``/``kube_context`` configure the Kubernetes tool; the Docker
+    tool needs no configuration.
     """
     _ = gate  # reserved: future tool families may need their own gate wiring
     registry = ToolRegistry()
     _register_filesystem(registry, workspace_root)
+    _register_shell(registry, workspace_root)
     _register_kubernetes(registry, namespace=namespace, context=kube_context)
     _register_docker(registry)
     return registry
@@ -113,6 +122,24 @@ def _register_filesystem(registry: ToolRegistry, workspace_root: Union[str, Path
                 execute=_executor(method),
                 mutating=mutating,
                 description=description,
+            )
+        )
+
+
+def _register_shell(registry: ToolRegistry, workspace_root: Union[str, Path]) -> None:
+    tool = ShellTool(
+        workspace_root=workspace_root,
+        gate=PermissionGate(require_approval=False),
+    )
+    for schema in SHELL_SCHEMAS:
+        registry.register(
+            RegisteredTool(
+                name=schema["name"],
+                schema=schema,
+                execute=_executor(tool.run),
+                mutating=False,
+                description="Run a shell command locally (read-only free; mutating needs approval).",
+                classify=lambda args: classify_command(args.get("command") or "") == "mutating",
             )
         )
 
