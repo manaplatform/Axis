@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added the `LICENSE` file with the MIT license text (copyright 2026 Axis
+  Contributors), matching the license declared in `pyproject.toml` and the
+  README.
 - Merged the shell tool branch into the agent work: `axis.tools.shell`
   (`ShellTool.run`, `classify_command`) is now part of main-line history.
   `axis.tools` now exposes per-family schemas (`OPENAI_FUNCTION_SCHEMAS`
