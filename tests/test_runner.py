@@ -306,6 +306,43 @@ def test_approved_mutating_tool_executes() -> None:
     assert len(gate.checks) == 1
 
 
+def test_activity_shows_approval_and_execution_states_for_mutating_tool() -> None:
+    registry, _ = _stub_registry()
+    observed: dict[str, str] = {}
+    runner: AgentRunner
+
+    class InspectingGate(FakeGate):
+        def check(self, action: str, risk: RiskLevel, details: str | None = None) -> bool:
+            observed["approval"] = runner._activity.status
+            return super().check(action, risk, details)
+
+    def execute(args: Dict[str, Any]) -> Dict[str, Any]:
+        observed["execution"] = runner._activity.status
+        return {"created": True}
+
+    registry.register(
+        RegisteredTool(
+            name="write_file",
+            schema={"type": "function", "name": "write_file", "parameters": {}},
+            execute=execute,
+            mutating=True,
+        )
+    )
+    client = ScriptedClient(
+        [
+            FakeResponse([FakeCall("write_file", "{}", "c1")]),
+            FakeResponse([], "done"),
+        ]
+    )
+    runner = _runner(registry, client, gate=InspectingGate())
+
+    assert runner.run("write a file") == "done"
+    assert observed == {
+        "approval": "Approval required · write_file · Approve? [y/n]",
+        "execution": "Running · write_file",
+    }
+
+
 def test_max_steps_stops_the_loop() -> None:
     registry, _ = _stub_registry()
     client = ScriptedClient(

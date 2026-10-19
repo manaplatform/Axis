@@ -258,6 +258,9 @@ class AgentRunner:
         self._show_call(name, arguments, mutating=mutating)
 
         if mutating and self.gate.require_approval:
+            self._set_activity_status(
+                f"Approval required · {name} · Approve? [y/n]", style="yellow"
+            )
             allowed = self.gate.check(
                 f"axis run: {name}", RiskLevel.MEDIUM, _summarize(name, arguments)
             )
@@ -265,7 +268,7 @@ class AgentRunner:
                 self._update_activity_row("Denied · approval required", style="yellow")
                 self._set_activity_status(f"Denied · {name}", style="yellow")
                 return json.dumps({"denied": True, "reason": "denied by approval gate"})
-            self._set_activity_status(f"Running · {name}")
+        self._set_activity_status(f"Running · {name}")
 
         try:
             result = tool.execute(arguments)

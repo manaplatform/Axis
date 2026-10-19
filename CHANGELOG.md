@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Made mutation approval choices visible in the `axis run` activity panel
+  (`Approve? [y/n]`) and simplified the terminal prompt to `Approve?`; the
+  prompt defaults to rejection.
+- Updated the `axis run` activity panel to show when a mutating tool is waiting
+  for approval and when any tool is executing, instead of leaving the status
+  on “Thinking” during tool execution.
 - Bounded Docker CLI calls with a configurable 30-second default timeout so a
   stalled daemon cannot hang agent tool calls indefinitely; timeout failures
   now return a clear Docker command error.

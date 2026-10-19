@@ -40,4 +40,6 @@ class PermissionGate:
         if details:
             console.print(f"Details: {details}")
 
-        return Confirm.ask("Do you want to proceed?", default=False)
+        # Rich's Confirm prompt accepts y/n input and displays the choices;
+        # keep the safe default explicit so Enter rejects the operation.
+        return Confirm.ask("Approve?", default=False)
