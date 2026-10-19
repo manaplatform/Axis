@@ -9,6 +9,24 @@
 ## 0.0.3
 
 - Bumped package version to 0.0.3.
+- Added the `LICENSE` file with the MIT license text (copyright 2026 Axis
+  Contributors), matching the license declared in `pyproject.toml` and the
+  README.
+- Merged the shell tool branch into the agent work: `axis.tools.shell`
+  (`ShellTool.run`, `classify_command`) is now part of main-line history.
+  `axis.tools` now exposes per-family schemas (`OPENAI_FUNCTION_SCHEMAS`
+  stays filesystem-only for backwards compatibility; new
+  `SHELL_FUNCTION_SCHEMAS` plus an `ALL_FUNCTION_SCHEMAS` aggregate).
+- Wired the `shell` function into the agent runner registry: each command is
+  classified per call — read-only commands run free, mutating ones need
+  approval through the runner's gate, denied ones are blocked and reported
+  to the model as an error.
+- Wired the Kubernetes and Docker tools into the agent runner registry:
+  `k8s_*` (get_pods, get_deployments, get_services, get_nodes, get_events,
+  current_context, describe, logs) and `docker_*` (list_containers, logs,
+  inspect, version, info) are now callable by the model through `axis run`.
+  Both tool families are fully read-only, so they execute without approval;
+  `axis run` gained `--namespace`/`--context` for the k8s tools.
 
 ## 0.0.2 — 2026-10-01
 

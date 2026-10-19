@@ -40,6 +40,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from axis.safety.permissions import PermissionGate, RiskLevel
+from axis.tools.workspace import (
+    PathOutsideWorkspaceError,
+    WorkspaceError,
+    resolve_in_workspace,
+)
+
+# Re-exported for backwards compatibility (moved to axis.tools.workspace).
+__all__ = ["PathOutsideWorkspaceError"]
 
 # Directories that are never descended into during a search unless the
 # caller explicitly opts in with ``include_hidden=True``.
@@ -62,12 +70,8 @@ _DEFAULT_MAX_RESULTS = 100
 _DEFAULT_MAX_SNIPPET_CHARS = 300
 
 
-class FilesystemError(Exception):
+class FilesystemError(WorkspaceError):
     """Base error for filesystem tool failures."""
-
-
-class PathOutsideWorkspaceError(FilesystemError):
-    """Raised when a path escapes the workspace root (fail-closed)."""
 
 
 class FileExistsError(FilesystemError):
@@ -93,27 +97,7 @@ class FilesystemTool:
     # ------------------------------------------------------------------
     def _resolve(self, path: str | Path) -> Path:
         """Resolve *path* inside the workspace root or raise."""
-        candidate = Path(path)
-        if not candidate.is_absolute():
-            candidate = self.workspace_root / candidate
-        # resolve() with strict=False: normalises `..` without requiring existence
-        resolved = candidate.resolve()
-        try:
-            resolved.relative_to(self.workspace_root)
-        except ValueError:
-            raise PathOutsideWorkspaceError(
-                f"path escapes workspace root {self.workspace_root}: {path}"
-            )
-        # A symlink inside the root pointing outside must also be rejected.
-        if resolved.is_symlink():
-            target = resolved.resolve()
-            try:
-                target.relative_to(self.workspace_root)
-            except ValueError:
-                raise PathOutsideWorkspaceError(
-                    f"symlink points outside workspace root: {path}"
-                )
-        return resolved
+        return resolve_in_workspace(self.workspace_root, path)
 
     def _iter_files(self, root: Path, include_hidden: bool):
         for dirpath, dirnames, filenames in os.walk(root, followlinks=False):

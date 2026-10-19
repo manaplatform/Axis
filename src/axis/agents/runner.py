@@ -196,10 +196,17 @@ class AgentRunner:
                 {"error": f"unknown tool: {name}", "available_tools": self.registry.names()}
             )
 
+<<<<<<< HEAD
         self._show_call(name, arguments, mutating=tool.mutating)
 
         if tool.mutating and self.gate.require_approval:
             self._set_activity_status(f"Approval required · {name}", style="yellow")
+=======
+        mutating = tool.mutating or (tool.classify is not None and bool(tool.classify(arguments)))
+        self._show_call(step, name, arguments, mutating=mutating)
+
+        if mutating and self.gate.require_approval:
+>>>>>>> main
             allowed = self.gate.check(
                 f"axis run: {name}", RiskLevel.MEDIUM, _summarize(name, arguments)
             )
@@ -408,4 +415,8 @@ def _summarize(name: str, arguments: Dict[str, Any]) -> str:
         path = arguments.get("path", "?")
         size = len(arguments.get("content", "") or "")
         return f"create file {path} ({size} chars)"
+    if name == "shell":
+        command = str(arguments.get("command", "?"))
+        workdir = arguments.get("workdir", ".")
+        return f"shell: {command[:200]} (cwd={workdir})"
     return f"{name} {json.dumps(arguments, ensure_ascii=False)[:200]}"

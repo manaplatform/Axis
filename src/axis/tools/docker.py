@@ -122,3 +122,105 @@ def _last_error_line(output: str) -> str:
     """Return the actionable final line from CLI error output."""
     lines = [line.strip() for line in output.splitlines() if line.strip()]
     return lines[-1] if lines else ""
+
+
+# ----------------------------------------------------------------------
+# OpenAI function-calling schemas
+# ----------------------------------------------------------------------
+# Read-only Docker operations as deployable function tools for the agent
+# runner. Every operation is non-mutating, so the runner executes them
+# without approval. Names are prefixed with ``docker_`` to avoid collisions
+# (e.g. both the Kubernetes and Docker tools expose ``logs``).
+DOCKER_FUNCTION_SCHEMAS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "name": "docker_list_containers",
+        "description": (
+            "List Docker containers. Read-only: free to call. Pass all=true "
+            "to include stopped containers."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "all": {
+                    "type": "boolean",
+                    "description": "Include stopped containers.",
+                    "default": False,
+                },
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "docker_logs",
+        "description": (
+            "Return recent log lines for a container. Read-only: free to "
+            "call. The first step when a container is misbehaving."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "container_id": {
+                    "type": "string",
+                    "description": "Container name or ID.",
+                },
+                "tail": {
+                    "type": "integer",
+                    "description": "Number of recent lines to return.",
+                    "default": 100,
+                },
+            },
+            "required": ["container_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "docker_inspect",
+        "description": (
+            "Return the Docker inspection document for a container "
+            "(config, mounts, network, state). Read-only: free to call."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "container_id": {
+                    "type": "string",
+                    "description": "Container name or ID.",
+                },
+            },
+            "required": ["container_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "docker_version",
+        "description": (
+            "Return Docker client and server version details. Read-only: "
+            "free to call."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "docker_info",
+        "description": (
+            "Return a machine-readable Docker daemon summary (containers, "
+            "images, storage, plugins). Read-only: free to call."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+]
