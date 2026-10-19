@@ -197,7 +197,7 @@ class AgentRunner:
             )
 
         mutating = tool.mutating or (tool.classify is not None and bool(tool.classify(arguments)))
-        self._show_call(step, name, arguments, mutating=mutating)
+        self._show_call(name, arguments, mutating=mutating)
 
         if mutating and self.gate.require_approval:
             allowed = self.gate.check(

@@ -2,9 +2,16 @@
 
 ## Unreleased
 
+- Fixed `axis run` crashing with `NameError` when rendering a valid tool call;
+  removed the undefined loop-step argument from the activity display call.
+
 - Replaced `axis run`'s separate tool-call/result panels with a refreshing Rich
   activity box that shows the prompt, numbered tool steps, compact arguments
   and results, and live execution/approval statuses.
+
+## 0.0.4
+
+- Bumped package version to 0.0.4.
 
 ## 0.0.3
 
