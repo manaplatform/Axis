@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Replaced `axis run`'s separate tool-call/result panels with a refreshing Rich
+  activity box that shows the prompt, numbered tool steps, compact arguments
+  and results, and live execution/approval statuses.
+
+## 0.0.3
+
+- Bumped package version to 0.0.3.
+
 ## 0.0.2 — 2026-10-01
 
 - Added `axis run`: an LLM tool-calling agent loop over the OpenAI Responses

@@ -123,6 +123,34 @@ def test_run_executes_tool_and_returns_final_answer() -> None:
     assert json.loads(outputs[0]["output"]) == {"matches": []}
 
 
+def test_run_renders_tools_and_results_in_one_activity_box() -> None:
+    registry, _ = _stub_registry()
+    client = ScriptedClient(
+        [
+            FakeResponse([FakeCall("search_directory", '{"pattern": "*.py"}', "c1")]),
+            FakeResponse([], "Found files"),
+        ]
+    )
+    output = io.StringIO()
+    runner = AgentRunner(
+        registry=registry,
+        llm=_llm(),
+        console=Console(file=output, width=100),
+        client=client,
+        gate=FakeGate(),
+    )
+
+    runner.run("find python files")
+
+    rendered = output.getvalue()
+    assert "Activity" in rendered
+    assert "find python files" in rendered
+    assert "search_directory" in rendered
+    assert "Done" in rendered
+    assert "matches" in rendered
+    assert "final answer" in rendered
+
+
 def test_run_passes_registry_schemas_as_tools() -> None:
     registry, _ = _stub_registry()
     client = ScriptedClient([FakeResponse([], "hi")])
