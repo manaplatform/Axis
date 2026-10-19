@@ -24,9 +24,12 @@ import json
 from typing import Any, Dict, List, Optional
 
 from openai import OpenAI
-from rich.console import Console, Group
+from rich.console import Console
+from rich.live import Live
 from rich.panel import Panel
-from rich.syntax import Syntax
+from rich.spinner import Spinner
+from rich.table import Table
+from rich.text import Text
 
 from axis.agents.registry import ToolRegistry, UnknownToolError
 from axis.core.llm import LLMClient
@@ -39,6 +42,8 @@ class RunnerError(RuntimeError):
 
 _DEFAULT_MAX_STEPS = 10
 _MAX_OUTPUT_CHARS = 4000
+_MAX_ACTIVITY_ROWS = 12
+_MAX_ACTIVITY_DETAIL_CHARS = 180
 
 # Fields the Responses API accepts on echoed input items. SDK output items
 # carry extra read-only fields (id, status, ...) that the API rejects with
@@ -75,6 +80,8 @@ class AgentRunner:
         self.gate = gate or PermissionGate()
         self.console = console or Console()
         self._client = client
+        self._activity: Optional[_RunActivity] = None
+        self._live: Optional[Live] = None
 
     # ------------------------------------------------------------------
     # public API
@@ -86,48 +93,58 @@ class AgentRunner:
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
         ]
-        self._show_header(prompt)
-
         final_answer = ""
-        for step in range(1, self.max_steps + 1):
-            try:
-                response = client.responses.create(
-                    model=self.model,
-                    input=thread,
-                    tools=self.registry.schemas(),
+        self._activity = _RunActivity(prompt, self.model, self.max_steps)
+        with Live(
+            self._activity.render(),
+            console=self.console,
+            refresh_per_second=8,
+            transient=False,
+        ) as live:
+            self._live = live
+            for step in range(1, self.max_steps + 1):
+                self._set_activity_status(f"Thinking · step {step}/{self.max_steps}")
+                try:
+                    response = client.responses.create(
+                        model=self.model,
+                        input=thread,
+                        tools=self.registry.schemas(),
+                    )
+                except Exception as error:
+                    self._set_activity_status("Request failed", style="red")
+                    raise RunnerError(f"LLM request failed: {error}") from error
+
+                output = list(getattr(response, "output", None) or [])
+                for item in output:
+                    echoed = _echo_item(item)
+                    if echoed is not None:
+                        thread.append(echoed)
+
+                calls = _function_calls(output)
+                text = _response_text(response)
+                if text:
+                    final_answer = text
+                if not calls:
+                    self._set_activity_status("Run complete", style="green")
+                    break
+
+                for call in calls:
+                    call_id = _field(call, "call_id") or f"call-{step}"
+                    result_json = self._execute_call(call)
+                    thread.append(
+                        {
+                            "type": "function_call_output",
+                            "call_id": call_id,
+                            "output": result_json,
+                        }
+                    )
+            else:
+                self._set_activity_status(
+                    f"Step limit reached · {self.max_steps}", style="yellow"
                 )
-            except Exception as error:
-                raise RunnerError(f"LLM request failed: {error}") from error
 
-            output = list(getattr(response, "output", None) or [])
-            for item in output:
-                echoed = _echo_item(item)
-                if echoed is not None:
-                    thread.append(echoed)
-
-            calls = _function_calls(output)
-            text = _response_text(response)
-            if text:
-                final_answer = text
-            if not calls:
-                break
-
-            for call in calls:
-                call_id = _field(call, "call_id") or f"call-{step}"
-                result_json = self._execute_call(step, call)
-                thread.append(
-                    {
-                        "type": "function_call_output",
-                        "call_id": call_id,
-                        "output": result_json,
-                    }
-                )
-        else:
-            self.console.print(
-                f"[yellow]Reached the step limit ({self.max_steps}); "
-                "returning the last answer.[/yellow]"
-            )
-
+        self._live = None
+        self._activity = None
         self._show_final(final_answer)
         return final_answer
 
@@ -156,7 +173,7 @@ class AgentRunner:
     # ------------------------------------------------------------------
     # tool execution
     # ------------------------------------------------------------------
-    def _execute_call(self, step: int, call: Any) -> str:
+    def _execute_call(self, call: Any) -> str:
         name = _field(call, "name") or "<unknown>"
         raw_arguments = _field(call, "arguments") or "{}"
         try:
@@ -168,83 +185,93 @@ class AgentRunner:
             if not isinstance(arguments, dict):
                 raise ValueError("arguments must be a JSON object")
         except (json.JSONDecodeError, ValueError) as error:
-            self._show_call(step, name, raw_arguments, error=f"invalid arguments: {error}")
+            self._show_call(name, raw_arguments, error=f"invalid arguments: {error}")
             return json.dumps({"error": f"invalid arguments JSON: {error}"})
 
         try:
             tool = self.registry.get(name)
         except UnknownToolError:
-            self._show_call(step, name, arguments, error=f"unknown tool: {name}")
+            self._show_call(name, arguments, error=f"unknown tool: {name}")
             return json.dumps(
                 {"error": f"unknown tool: {name}", "available_tools": self.registry.names()}
             )
 
         mutating = tool.mutating or (tool.classify is not None and bool(tool.classify(arguments)))
-        self._show_call(step, name, arguments, mutating=mutating)
+        self._show_call(name, arguments, mutating=mutating)
 
         if mutating and self.gate.require_approval:
             allowed = self.gate.check(
                 f"axis run: {name}", RiskLevel.MEDIUM, _summarize(name, arguments)
             )
             if not allowed:
-                self.console.print("[yellow]Denied by approval gate; reported to the model.[/yellow]")
+                self._update_activity_row("Denied · approval required", style="yellow")
+                self._set_activity_status(f"Denied · {name}", style="yellow")
                 return json.dumps({"denied": True, "reason": "denied by approval gate"})
+            self._set_activity_status(f"Running · {name}")
 
         try:
             result = tool.execute(arguments)
         except Exception as error:
-            self._show_result(name, None, error=f"{type(error).__name__}: {error}")
+            self._show_result(None, error=f"{type(error).__name__}: {error}")
             return json.dumps({"error": f"{type(error).__name__}: {error}"})
         if not isinstance(result, dict):
             result = {"result": result}
-        self._show_result(name, result)
+        self._show_result(result)
         return _truncate(json.dumps(result, ensure_ascii=False, default=str))
 
     # ------------------------------------------------------------------
     # display
     # ------------------------------------------------------------------
-    def _show_header(self, prompt: str) -> None:
-        self.console.print(
-            Panel.fit(
-                f"[bold]axis run[/bold]\n{prompt}\n"
-                f"[dim]model={self.model} · max_steps={self.max_steps}[/dim]",
-                border_style="cyan",
-            )
-        )
+    def _refresh_activity(self) -> None:
+        if self._activity is not None and self._live is not None:
+            self._live.update(self._activity.render(), refresh=True)
+
+    def _set_activity_status(self, status: str, *, style: str = "cyan") -> None:
+        if self._activity is not None:
+            self._activity.status = status
+            self._activity.status_style = style
+            self._refresh_activity()
+
+    def _update_activity_row(self, status: str, *, style: str) -> None:
+        if self._activity is not None and self._activity.rows:
+            self._activity.rows[-1]["status"] = status
+            self._activity.rows[-1]["style"] = style
+            self._refresh_activity()
 
     def _show_call(
         self,
-        step: int,
         name: str,
         arguments: Any,
         *,
         mutating: bool = False,
         error: Optional[str] = None,
     ) -> None:
-        title = f"step {step} · tool call: {name}"
+        details = f"{name} · {_compact(arguments, limit=75)}"
         if mutating:
-            title += " [yellow](mutating — approval required)[/yellow]"
-        renderables: List[Any] = [_pretty_json(arguments)]
+            details += " · mutation"
         if error:
-            renderables.append(f"[red]{error}[/red]")
-        self.console.print(Panel(Group(*renderables), title=title, border_style="cyan"))
+            self._activity_add(details, f"Failed · {error}", style="red")
+        else:
+            self._activity_add(details, "Running", style="cyan")
 
     def _show_result(
-        self, name: str, result: Optional[Dict[str, Any]], *, error: Optional[str] = None
+        self, result: Optional[Dict[str, Any]], *, error: Optional[str] = None
     ) -> None:
         if error:
-            self.console.print(
-                Panel(f"[red]{error}[/red]", title=f"result: {name}", border_style="red")
-            )
+            self._update_activity_row(f"Failed · {error}", style="red")
             return
         assert result is not None
-        self.console.print(
-            Panel(
-                _pretty_json(_truncate(json.dumps(result, ensure_ascii=False, default=str))),
-                title=f"result: {name}",
-                border_style="green",
+        if self._activity is not None and self._activity.rows:
+            details = self._activity.rows[-1]["details"]
+            self._activity.rows[-1]["details"] = _limit(
+                f"{details} → {_compact(result, limit=75)}"
             )
-        )
+        self._update_activity_row("Done", style="green")
+
+    def _activity_add(self, details: str, status: str, *, style: str) -> None:
+        if self._activity is not None:
+            self._activity.add(details, status, style)
+            self._refresh_activity()
 
     def _show_final(self, final_answer: str) -> None:
         self.console.print(
@@ -254,6 +281,61 @@ class AgentRunner:
                 border_style="magenta",
             )
         )
+
+
+class _RunActivity:
+    """State and rendering for the single live activity panel."""
+
+    def __init__(self, prompt: str, model: str, max_steps: int) -> None:
+        self.prompt = prompt
+        self.model = model
+        self.max_steps = max_steps
+        self.status = "Starting"
+        self.status_style = "cyan"
+        self.rows: List[Dict[str, Any]] = []
+        self.next_step = 1
+
+    def add(self, details: str, status: str, style: str) -> None:
+        self.rows.append(
+            {
+                "step": self.next_step,
+                "details": _limit(details),
+                "status": status,
+                "style": style,
+            }
+        )
+        self.next_step += 1
+        del self.rows[:-_MAX_ACTIVITY_ROWS]
+
+    def render(self) -> Panel:
+        body = Table.grid(padding=(0, 1))
+        body.add_column(style="bold cyan", no_wrap=True)
+        body.add_column()
+        body.add_row("Prompt", Text(self.prompt))
+        body.add_row("Model", Text(f"{self.model} · max {self.max_steps} steps"))
+
+        if self.rows:
+            activity = Table(show_header=True, header_style="bold", expand=True, box=None)
+            activity.add_column("Step", width=6, no_wrap=True)
+            activity.add_column("Activity", ratio=1)
+            activity.add_column("Status", width=24)
+            for row in self.rows:
+                activity.add_row(
+                    Text(str(row["step"]), style="bold cyan"),
+                    Text(row["details"]),
+                    Text(row["status"], style=row["style"]),
+                )
+            body.add_row("Steps", activity)
+
+        status_text = Text(self.status, style=self.status_style)
+        if self.status == "Starting" or self.status.startswith(
+            ("Thinking", "Running", "Approval required")
+        ):
+            current_status: Any = Spinner("dots", text=status_text, style=self.status_style)
+        else:
+            current_status = status_text
+        body.add_row("Now", current_status)
+        return Panel(body, title="axis run · Activity", border_style="cyan", padding=(1, 2))
 
 
 # ----------------------------------------------------------------------
@@ -298,14 +380,20 @@ def _response_text(response: Any) -> str:
     return "".join(parts)
 
 
-def _pretty_json(value: Any) -> Any:
+def _compact(value: Any, *, limit: int = _MAX_ACTIVITY_DETAIL_CHARS) -> str:
+    """Format activity details as short, single-line JSON."""
     try:
-        text = value if isinstance(value, str) else json.dumps(value, indent=2, ensure_ascii=False)
-        if len(text) > _MAX_OUTPUT_CHARS:
-            text = text[:_MAX_OUTPUT_CHARS] + "…"
-        return Syntax(text, "json", theme="monokai", word_wrap=True)
+        text = json.dumps(value, ensure_ascii=False, default=str)
     except (TypeError, ValueError):
-        return str(value)
+        text = str(value)
+    return _limit(text, limit=limit)
+
+
+def _limit(text: str, *, limit: int = _MAX_ACTIVITY_DETAIL_CHARS) -> str:
+    text = " ".join(text.split())
+    if len(text) > limit:
+        return text[: limit - 1] + "…"
+    return text
 
 
 def _truncate(text: str, limit: int = _MAX_OUTPUT_CHARS) -> str:
