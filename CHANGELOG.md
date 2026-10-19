@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+- Made mutation approval choices visible in the `axis run` activity panel
+  (`Approve? [y/n]`) and simplified the terminal prompt to `Approve?`; the
+  prompt defaults to rejection.
+- Updated the `axis run` activity panel to show when a mutating tool is waiting
+  for approval and when any tool is executing, instead of leaving the status
+  on “Thinking” during tool execution.
+- Bounded Docker CLI calls with a configurable 30-second default timeout so a
+  stalled daemon cannot hang agent tool calls indefinitely; timeout failures
+  now return a clear Docker command error.
+- Updated the agent system prompt to deprioritize generated build/install
+  artifacts, caches, and package metadata (including `*.egg-info`) during
+  repository inspection unless the user asks about them or they are relevant.
+- Fixed a malformed fallback string in `axis run`'s final activity display that
+  prevented the runner module from importing.
+- Expanded the DevOps guidance and agent prompts for Programmatic Tool Calling:
+  documents model/provider checks, eligible read-only tools, local tool execution
+  scopes, workflow selection, safety boundaries, and practical Kubernetes,
+  Docker, and workspace-search prompt patterns without asserting new permissions.
+- Added opt-in Responses API Programmatic Tool Calling to `axis run` via
+  `--programmatic-tools`. Axis uses OpenAI's hosted JavaScript runtime (it
+  does not execute generated code locally), exposes only eligible read-only
+  tools to program callers, preserves program replay items and caller metadata,
+  and continues until a final assistant message. Program execution remains
+  opt-in because model support must be checked first; direct calls remain the
+  default for writes and approvals. `axis run` now reports unique tools used.
+- Made Responses SDK item serialization compatible with `model_dump` variants
+  that do not accept `exclude_none`, and added regression coverage for caller
+  metadata replay, eligible programmatic schemas, and unique used-tool reports.
 - Fixed `axis run` crashing with `NameError` when rendering a valid tool call;
   removed the undefined loop-step argument from the activity display call.
 

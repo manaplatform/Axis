@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import shutil
 import subprocess
 from typing import Any
@@ -22,6 +23,13 @@ class DockerCommandError(DockerToolError):
 
 class DockerTool:
     """Small, read-only wrapper around the locally installed Docker CLI."""
+
+    DEFAULT_TIMEOUT_SECONDS = 30.0
+
+    def __init__(self, timeout: float = DEFAULT_TIMEOUT_SECONDS):
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("timeout must be a finite number greater than zero")
+        self.timeout = timeout
 
     @staticmethod
     def is_available() -> bool:
@@ -92,7 +100,12 @@ class DockerTool:
                 capture_output=True,
                 text=True,
                 check=False,
+                timeout=self.timeout,
             )
+        except subprocess.TimeoutExpired as error:
+            raise DockerCommandError(
+                f"docker command timed out after {self.timeout:g} seconds"
+            ) from error
         except OSError as error:
             raise DockerUnavailableError(f"could not run docker: {error}") from error
 
