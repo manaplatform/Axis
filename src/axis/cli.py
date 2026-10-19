@@ -312,6 +312,10 @@ def _print_plan(plan_result: dict) -> None:
 @click.option("--max-steps", "max_steps", default=10, show_default=True, help="Maximum tool-calling steps.")
 @click.option("--model", default=None, help="Override the configured model.")
 @click.option(
+    "--programmatic-tools", is_flag=True,
+    help="Enable hosted Programmatic Tool Calling (check model support first).",
+)
+@click.option(
     "--workspace", "-w", "workspace", default=".", show_default=True,
     help="Workspace root for file tools.",
 )
@@ -321,6 +325,7 @@ def run(
     prompt: str,
     max_steps: int,
     model: Optional[str],
+    programmatic_tools: bool,
     workspace: str,
     namespace: Optional[str],
     kube_context: Optional[str],
@@ -352,6 +357,7 @@ def run(
             model=model,
             max_steps=max_steps,
             gate=gate,
+            programmatic_tool_calling=programmatic_tools,
         )
         runner.run(prompt)
     except (RunnerError, FilesystemError) as error:

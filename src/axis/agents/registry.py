@@ -33,6 +33,7 @@ class RegisteredTool:
     execute: Callable[[Dict[str, Any]], Dict[str, Any]]
     mutating: bool = False
     description: str = ""
+    programmatic: bool = False
     # Optional per-call mutation check, for tools whose risk depends on the
     # arguments (e.g. the shell tool classifies each command). When present,
     # the runner treats the call as mutating if either flag says so.
@@ -59,9 +60,15 @@ class ToolRegistry:
     def names(self) -> List[str]:
         return list(self._tools)
 
-    def schemas(self) -> List[Dict[str, Any]]:
-        """OpenAI Responses API ``tools`` entries, in registration order."""
-        return [tool.schema for tool in self._tools.values()]
+    def schemas(self, *, programmatic_tool_calling: bool = False) -> List[Dict[str, Any]]:
+        """OpenAI Responses API tools, preserving registration order."""
+        schemas: List[Dict[str, Any]] = []
+        for tool in self._tools.values():
+            schema = dict(tool.schema)
+            if programmatic_tool_calling and tool.programmatic:
+                schema["allowed_callers"] = ["direct", "programmatic"]
+            schemas.append(schema)
+        return schemas
 
 
 def _executor(method: Callable[..., Any]) -> Callable[[Dict[str, Any]], Dict[str, Any]]:
@@ -122,6 +129,7 @@ def _register_filesystem(registry: ToolRegistry, workspace_root: Union[str, Path
                 execute=_executor(method),
                 mutating=mutating,
                 description=description,
+                programmatic=(name == "search_directory"),
             )
         )
 
@@ -168,6 +176,7 @@ def _register_kubernetes(
                 execute=_executor(method),
                 mutating=False,
                 description=description,
+                programmatic=True,
             )
         )
 
@@ -191,5 +200,6 @@ def _register_docker(registry: ToolRegistry) -> None:
                 execute=_executor(method),
                 mutating=False,
                 description=description,
+                programmatic=True,
             )
         )

@@ -14,7 +14,7 @@ from axis.agents.registry import (
     UnknownToolError,
     default_registry,
 )
-from axis.agents.runner import AgentRunner
+from axis.agents.runner import AgentRunner, RunnerError
 from axis.core.llm import LLMClient
 from axis.safety.permissions import RiskLevel
 from rich.console import Console
@@ -26,10 +26,13 @@ from rich.console import Console
 class FakeCall:
     type = "function_call"
 
-    def __init__(self, name: str, arguments: str, call_id: str = "call-1") -> None:
+    def __init__(
+        self, name: str, arguments: str, call_id: str = "call-1", caller: Any = None
+    ) -> None:
         self.name = name
         self.arguments = arguments
         self.call_id = call_id
+        self.caller = caller
 
 
 class FakeResponse:
@@ -88,6 +91,7 @@ def _stub_registry() -> tuple[ToolRegistry, dict]:
             schema={"type": "function", "name": "search_directory", "parameters": {}},
             execute=lambda args: seen.update(args) or {"matches": []},
             mutating=False,
+            programmatic=True,
         )
     )
     registry.register(
@@ -149,6 +153,8 @@ def test_run_renders_tools_and_results_in_one_activity_box() -> None:
     assert "Done" in rendered
     assert "matches" in rendered
     assert "final answer" in rendered
+    assert "Tools used:" in rendered
+    assert "search_directory" in runner.used_tools
 
 
 def test_run_passes_registry_schemas_as_tools() -> None:
@@ -157,6 +163,40 @@ def test_run_passes_registry_schemas_as_tools() -> None:
     _runner(registry, client, gate=FakeGate()).run("hi")
     assert client.responses.requests[0]["tools"] == registry.schemas()
     assert client.responses.requests[0]["model"] == "gpt-4o"
+
+
+def test_programmatic_calls_preserve_caller_and_report_unique_tools() -> None:
+    registry, _ = _stub_registry()
+    caller = {"type": "program", "caller_id": "program-1"}
+    client = ScriptedClient(
+        [
+            FakeResponse([
+                FakeCall("search_directory", '{"pattern": "*.py"}', "c1", caller),
+                FakeCall("search_directory", '{"pattern": "*.md"}', "c2", caller),
+            ]),
+            FakeResponse([], "Collected results"),
+        ]
+    )
+    runner = _runner(
+        registry, client, gate=FakeGate(), programmatic_tool_calling=True
+    )
+
+    assert runner.run("collect matching files") == "Collected results"
+    offered = client.responses.requests[0]["tools"]
+    search_schema = next(tool for tool in offered if tool.get("name") == "search_directory")
+    create_schema = next(tool for tool in offered if tool.get("name") == "create_file")
+    assert search_schema["allowed_callers"] == ["direct", "programmatic"]
+    assert "allowed_callers" not in create_schema
+    assert {tool["type"] for tool in offered} >= {"function", "programmatic_tool_calling"}
+
+    follow_up = client.responses.requests[1]["input"]
+    calls = [item for item in follow_up if item.get("type") == "function_call"]
+    outputs = [item for item in follow_up if item.get("type") == "function_call_output"]
+    assert len(calls) == 2
+    assert all(item["caller"] == caller for item in calls)
+    assert len(outputs) == 2
+    assert all(item["caller"] == caller for item in outputs)
+    assert runner.used_tools == ["search_directory"]
 
 
 def test_echoed_function_call_has_only_api_accepted_fields() -> None:

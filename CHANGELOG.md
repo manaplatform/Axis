@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Fixed a malformed fallback string in `axis run`'s final activity display that
+  prevented the runner module from importing.
+- Expanded the DevOps guidance and agent prompts for Programmatic Tool Calling:
+  documents model/provider checks, eligible read-only tools, local tool execution
+  scopes, workflow selection, safety boundaries, and practical Kubernetes,
+  Docker, and workspace-search prompt patterns without asserting new permissions.
+- Added opt-in Responses API Programmatic Tool Calling to `axis run` via
+  `--programmatic-tools`. Axis uses OpenAI's hosted JavaScript runtime (it
+  does not execute generated code locally), exposes only eligible read-only
+  tools to program callers, preserves program replay items and caller metadata,
+  and continues until a final assistant message. Program execution remains
+  opt-in because model support must be checked first; direct calls remain the
+  default for writes and approvals. `axis run` now reports unique tools used.
+- Made Responses SDK item serialization compatible with `model_dump` variants
+  that do not accept `exclude_none`, and added regression coverage for caller
+  metadata replay, eligible programmatic schemas, and unique used-tool reports.
 - Fixed `axis run` crashing with `NameError` when rendering a valid tool call;
   removed the undefined loop-step argument from the activity display call.
 
