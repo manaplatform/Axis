@@ -165,6 +165,18 @@ def test_run_passes_registry_schemas_as_tools() -> None:
     assert client.responses.requests[0]["model"] == "gpt-4o"
 
 
+def test_system_prompt_ignores_generated_metadata_during_repository_inspection() -> None:
+    registry, _ = _stub_registry()
+    client = ScriptedClient([FakeResponse([], "hi")])
+
+    _runner(registry, client, gate=FakeGate()).run("inspect repository")
+
+    system_prompt = client.responses.requests[0]["input"][0]["content"]
+    assert "generated build/install artifacts" in system_prompt
+    assert "*.egg-info" in system_prompt
+    assert "unless the user specifically" in system_prompt
+
+
 def test_programmatic_calls_preserve_caller_and_report_unique_tools() -> None:
     registry, _ = _stub_registry()
     caller = {"type": "program", "caller_id": "program-1"}

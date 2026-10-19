@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Updated the agent system prompt to deprioritize generated build/install
+  artifacts, caches, and package metadata (including `*.egg-info`) during
+  repository inspection unless the user asks about them or they are relevant.
 - Fixed a malformed fallback string in `axis run`'s final activity display that
   prevented the runner module from importing.
 - Expanded the DevOps guidance and agent prompts for Programmatic Tool Calling:
