@@ -6,7 +6,7 @@ import subprocess
 import unittest
 from unittest.mock import patch
 
-from axis.tools.docker import DockerTool, DockerUnavailableError
+from axis.tools.docker import DockerCommandError, DockerTool, DockerUnavailableError
 from axis.tools.kubernetes import KubernetesCommandError, KubernetesTool, KubernetesUnavailableError
 
 
@@ -59,9 +59,29 @@ class DockerToolTests(unittest.TestCase):
             capture_output=True,
             text=True,
             check=False,
+            timeout=30.0,
         )
 
     @patch("axis.tools.docker.shutil.which", return_value=None)
     def test_missing_docker_has_helpful_error(self, _which) -> None:
         with self.assertRaisesRegex(DockerUnavailableError, "not installed"):
             DockerTool().list_containers()
+
+    @patch("axis.tools.docker.shutil.which", return_value="/usr/bin/docker")
+    @patch("axis.tools.docker.subprocess.run", side_effect=subprocess.TimeoutExpired("docker", 2))
+    def test_docker_timeout_is_reported_as_a_command_error(self, run, _which) -> None:
+        with self.assertRaisesRegex(DockerCommandError, "timed out after 2 seconds"):
+            DockerTool(timeout=2).list_containers()
+
+        run.assert_called_once_with(
+            ["docker", "ps", "--format", "{{json .}}"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=2,
+        )
+
+    def test_timeout_must_be_positive_and_finite(self) -> None:
+        for timeout in (0, -1, float("inf"), float("nan")):
+            with self.subTest(timeout=timeout), self.assertRaises(ValueError):
+                DockerTool(timeout=timeout)

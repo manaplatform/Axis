@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Bounded Docker CLI calls with a configurable 30-second default timeout so a
+  stalled daemon cannot hang agent tool calls indefinitely; timeout failures
+  now return a clear Docker command error.
 - Updated the agent system prompt to deprioritize generated build/install
   artifacts, caches, and package metadata (including `*.egg-info`) during
   repository inspection unless the user asks about them or they are relevant.
