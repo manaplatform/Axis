@@ -6,20 +6,16 @@ from axis.safety import permissions
 from axis.safety.permissions import PermissionGate, RiskLevel
 
 
-def test_mutation_prompt_asks_for_approval_and_defaults_to_rejection(monkeypatch) -> None:
-    observed = {}
-
-    def ask(prompt, *, default):
-        observed.update(prompt=prompt, default=default)
-        return False
-
-    monkeypatch.setattr(permissions.Confirm, "ask", ask)
+def test_mutation_prompt_rejects_on_n_keystroke_without_enter(monkeypatch) -> None:
+    keys = iter(["x", "\n", "n"])
+    observed = []
+    monkeypatch.setattr(permissions.click, "getchar", lambda *, echo: observed.append(echo) or next(keys))
 
     assert PermissionGate().check("write file", RiskLevel.MEDIUM) is False
-    assert observed == {"prompt": "Approve?", "default": False}
+    assert observed == [False, False, False]
 
 
-def test_gate_returns_confirmation_for_mutation(monkeypatch) -> None:
-    monkeypatch.setattr(permissions.Confirm, "ask", lambda prompt, *, default: True)
+def test_gate_accepts_uppercase_y_keystroke_without_enter(monkeypatch) -> None:
+    monkeypatch.setattr(permissions.click, "getchar", lambda *, echo: "Y")
 
     assert PermissionGate().check("write file", RiskLevel.MEDIUM) is True
