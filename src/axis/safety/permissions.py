@@ -5,8 +5,8 @@ from __future__ import annotations
 from enum import Enum
 from typing import Optional
 
+import click
 from rich.console import Console
-from rich.prompt import Confirm
 
 console = Console()
 
@@ -40,6 +40,14 @@ class PermissionGate:
         if details:
             console.print(f"Details: {details}")
 
-        # Rich's Confirm prompt accepts y/n input and displays the choices;
-        # keep the safe default explicit so Enter rejects the operation.
-        return Confirm.ask("Approve?", default=False)
+        return _confirm_approval()
+
+
+def _confirm_approval() -> bool:
+    """Wait for a y/n keystroke without requiring the user to press Enter."""
+    console.print("Approve? [y/n] ", end="")
+    while True:
+        choice = click.getchar(echo=False).lower()
+        if choice in ("y", "n"):
+            console.print(choice)
+            return choice == "y"
