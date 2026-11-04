@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added the Axis logo above the README content.
+
 - Changed mutation approval to accept a `y` or `n` keystroke immediately,
   without requiring Enter; invalid keys are ignored and only `y` approves.
   The prompt displays `Approve? [y/n]`.

@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="logo.png" alt="Axis logo" width="200">
+</p>
+
 # Axis
 
 **AI Agent for Cloud, Kubernetes & Docker Operations**
